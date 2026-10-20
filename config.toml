@@ -1,0 +1,54 @@
+# ─── Configuration du bot de daytrading Coinbase Advanced ───
+# Mode : "backtest" | "paper" | "live". Le mode live exige aussi --live en CLI
+# et la variable d'environnement DAYBOT_LIVE_CONFIRM=OUI.
+mode = "paper"
+
+# Paires tradées (cotation EUR : pas de risque de change pour un résident FR).
+products = ["BTC-EUR", "ETH-EUR", "SOL-EUR", "XRP-EUR"]
+portfolio_id = ""           # vide = portefeuille par défaut
+quote_currency = "EUR"
+
+[timeframes]
+signal = "FIFTEEN_MINUTE"   # bougies d'entrée
+trend  = "ONE_HOUR"         # filtre de tendance
+
+[fees]                       # palier "Intro" lu sur le compte le 20/10/2026
+maker = 0.0025
+taker = 0.0050
+slippage = 0.0005            # slippage estimé sur les sorties au stop
+
+[strategy]
+ema_fast = 9
+ema_slow = 21
+ema_trend = 50               # sur le timeframe "trend"
+rsi_period = 14
+rsi_min = 50
+rsi_max = 70
+atr_period = 14
+stop_atr = 1.5               # stop = entrée - 1.5 × ATR
+reward_risk = 2.0            # TP = entrée + 2R
+# Le mouvement visé (TP - entrée) doit couvrir au moins N fois les frais aller-retour.
+min_edge_over_fees = 3.0
+entry_offset_atr = 0.1       # limite post-only légèrement sous le close (maker)
+entry_ttl_bars = 2           # annule l'ordre d'entrée non rempli après N bougies
+max_hold_bars = 32           # sortie forcée après 8 h en 15 min (pas de swing involontaire)
+
+[risk]
+risk_per_trade = 0.005       # 0,5 % du capital risqué par trade
+max_position_pct = 0.25      # une position ≤ 25 % du capital
+max_open_positions = 2
+max_trades_per_day = 6
+max_daily_loss = 0.02        # arrêt pour la journée à -2 %
+max_drawdown = 0.10          # kill switch global à -10 % depuis le plus haut
+min_order_quote = 10.0       # en dessous, on ne trade pas (frais/min Coinbase)
+kill_switch_file = "data/STOP"   # créez ce fichier pour tout arrêter
+# Pas de nouvelle entrée pendant les fenêtres macro (UTC). FOMC 28/10/2026 : 18h00 UTC.
+blackout = [
+  ["2026-10-28T16:00:00Z", "2026-10-29T02:00:00Z"],
+]
+
+[paper]
+starting_balance = 1000.0
+
+[journal]
+path = "data/journal.sqlite"
