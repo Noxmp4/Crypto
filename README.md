@@ -51,22 +51,59 @@ Pas de biais de look-ahead : une bougie n'est utilisée qu'après sa clôture, y
 | Ordre minimum | 10 € |
 | Kill switch | `touch data/STOP` bloque toute nouvelle entrée |
 
-## Installation
+## Installation sur macOS (Intel ou Apple Silicon)
+
+Python 3.9 ou plus récent. Le `/usr/bin/python3` d'Apple (3.9) fonctionne. Homebrew est
+recommandé (`brew install python@3.12`).
 
 ```bash
-cd coinbase-daybot
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python -m pytest -q          # 11 tests
+git clone https://github.com/Noxmp4/crypto.git
+cd crypto
+scripts/install_macos.sh        # crée .venv, installe les dépendances, lance les 16 tests
 ```
 
-## Utilisation
+Le script choisit le Python le plus récent disponible et peut être relancé sans risque.
+Si macOS bloque l'exécution : `chmod +x scripts/*.sh`.
+
+### Utilisation sur macOS
 
 ```bash
-python -m daybot backtest --days 180   # historique public, aucune clé requise
-python -m daybot paper                 # temps réel simulé, 1000 € fictifs
-python -m daybot status                # positions et P&L du journal
-python -m daybot export-tax --out data/cessions_2026.csv
+scripts/run_macos.sh backtest --days 180   # historique public, aucune clé requise
+scripts/run_macos.sh paper                 # temps réel simulé, 1000 € fictifs
+scripts/run_macos.sh status                # positions et P&L du journal
+scripts/run_macos.sh export-tax --out data/cessions_2026.csv
+touch data/STOP                            # kill switch : plus aucune nouvelle entrée
+```
+
+Spécificités macOS :
+
+- **Pas de mise en veille** : en mode `paper` ou `live`, `run_macos.sh` lance le bot sous
+  `caffeinate -is`. Le Mac ne s'endort pas tant que le bot tourne, sur secteur. Un MacBook
+  **capot fermé** sans écran externe s'endort quand même : laissez-le ouvert ou utilisez un Mac mini.
+- **Notifications** : chaque achat rempli, chaque sortie (avec le P&L) et chaque arrêt du bot
+  s'affichent dans le Centre de notifications. Pour les couper : `notifications = false` sous
+  `[macos]` dans `config.toml`. La première notification peut demander une autorisation pour
+  « Script Editor » ou le Terminal dans *Réglages Système → Notifications*.
+- **Trousseau** : la clé API peut être stockée dans le Trousseau macOS plutôt qu'en fichier
+  (voir *Passer en réel*).
+- **Arrêt et reprise** : `Ctrl+C` arrête le bot. Au relancement, il reprend son état depuis
+  `data/` : positions ouvertes, solde paper, plus haut de capital pour le drawdown, perte du jour.
+- **Logs** : `data/daybot.log`, avec rotation à 5 Mo et 3 archives. Suivi en direct :
+  `tail -f data/daybot.log`.
+- Le bot peut être lancé depuis n'importe quel dossier : les chemins de `config.toml` sont
+  relatifs à son emplacement.
+
+Pour qu'il tourne après fermeture du Terminal, lancez-le dans `tmux` ou `screen`
+(`brew install tmux`, puis `tmux new -s daybot` et `scripts/run_macos.sh paper`).
+Pour vous détacher sans l'arrêter : `Ctrl+B` puis `D`.
+
+## Installation sur Linux / autres
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python -m pytest -q
+python -m daybot backtest --days 180      # mêmes commandes, avec « python -m daybot »
 ```
 
 ### Passer en réel (seulement après validation)
@@ -77,12 +114,23 @@ python -m daybot export-tax --out data/cessions_2026.csv
    que vous acceptez de perdre, et mettez son UUID dans `portfolio_id`.
 3. Approvisionnez-le en EUR. Votre compte ne contient aujourd'hui qu'environ 0,0018 ETH (≈ 4 €) :
    c'est en dessous du minimum de 10 € par ordre, donc le bot ne peut rien faire en l'état.
-4. Lancez :
+4. Rangez la clé. Sur macOS, mettez-la dans le **Trousseau**, puis supprimez le JSON :
 
 ```bash
-export COINBASE_KEY_FILE=~/cdp_api_key.json      # ou COINBASE_API_KEY / COINBASE_API_SECRET
-sed -i 's/^mode = "paper"/mode = "live"/' config.toml
-DAYBOT_LIVE_CONFIRM=OUI python -m daybot live --live
+scripts/run_macos.sh keychain-import ~/Downloads/cdp_api_key.json
+rm ~/Downloads/cdp_api_key.json          # la clé n'existe plus qu'en Trousseau
+# pour la retirer plus tard : scripts/run_macos.sh keychain-forget
+```
+
+   Si macOS demande l'accès au Trousseau au lancement, cliquez « Toujours autoriser ».
+   Autres options, prioritaires sur le Trousseau : `export COINBASE_KEY_FILE=~/cdp_api_key.json`,
+   ou `COINBASE_API_KEY` / `COINBASE_API_SECRET`.
+5. Ouvrez `config.toml` (par exemple `open -e config.toml`) et remplacez `mode = "paper"` par
+   `mode = "live"`.
+6. Lancez :
+
+```bash
+DAYBOT_LIVE_CONFIRM=OUI scripts/run_macos.sh live --live
 ```
 
 Le mode réel exige ces trois verrous en même temps. Le bot ne vend jamais d'actifs qu'il n'a pas
@@ -90,8 +138,8 @@ achetés lui-même : vos ETH existants ne sont pas touchés. Comme le stop et le
 Coinbase, une position reste protégée même si le bot s'arrête. Au redémarrage, l'état est relu
 depuis `data/journal.sqlite`.
 
-Pour faire tourner le bot 24/7, utilisez un petit VPS ou un service `systemd`. Pensez à `tmux` si
-vous le lancez à la main.
+Pour faire tourner le bot 24/7, utilisez un Mac branché qui ne se met pas en veille, avec `tmux`,
+ou un petit VPS Linux.
 
 ## Résultats du backtest (au 20/10/2026, 1 000 € de départ, frais du palier Intro)
 
@@ -125,9 +173,14 @@ daybot/
   risk.py        sizing + garde-fous
   broker.py      PaperBroker (simulation conservatrice) / LiveBroker (SDK coinbase-advanced-py)
   engine.py      moteur commun : une bougie clôturée → gestion des ordres → nouveau signal
-  journal.py     SQLite (état + historique) et export fiscal CSV
+  journal.py     SQLite (trades, état du moteur) et export fiscal CSV
   backtest.py    rejoue l'historique à travers le même moteur
+  credentials.py clés API : variables d'environnement, sinon Trousseau macOS (keyring)
+  notify.py      notifications macOS (osascript), sans effet ailleurs
   __main__.py    CLI
+scripts/
+  install_macos.sh   installation (venv + dépendances + tests)
+  run_macos.sh       lancement (caffeinate pour paper/live)
 ```
 
 Pour changer de stratégie, il suffit de remplacer `strategy.signal_at`. Risque, exécution,
@@ -143,5 +196,9 @@ journal et backtest restent inchangés.
 - Le CSV fiscal liste les cessions, mais la plus-value française (art. 150 VH bis) dépend de la valeur
   **globale** de votre portefeuille à chaque cession. Complétez-le avec un outil de déclaration
   ou faites-le valider par un professionnel.
+- Le support macOS a été testé sous Linux avec Python 3.9 (version de `/usr/bin/python3` sur macOS)
+  et 3.13, mais pas sur un Mac physique. Les appels propres à macOS (`osascript`, `caffeinate`,
+  Trousseau) sont couverts par des tests simulés. Lancez `scripts/install_macos.sh` puis un
+  backtest pour valider sur votre machine.
 - **Ceci n'est pas un conseil en investissement.** Le daytrading crypto fait perdre de l'argent à la
   majorité des particuliers, surtout quand les frais sont élevés.

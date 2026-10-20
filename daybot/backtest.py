@@ -27,7 +27,8 @@ def load_data(cfg: Config, days: int) -> dict[str, pd.DataFrame]:
 
 def run(cfg: Config, data: dict[str, pd.DataFrame], no_fees: bool = False) -> dict:
     # Le backtest ignore kill switch / blackout réels.
-    cfg = dataclasses.replace(cfg, risk=dataclasses.replace(cfg.risk, kill_switch_file="/nonexistent", blackout=[]))
+    cfg = dataclasses.replace(cfg, notifications=False, risk=dataclasses.replace(
+        cfg.risk, kill_switch_file="/nonexistent", blackout=[]))
     # no_fees : mêmes signaux (le filtre d'edge garde les frais), exécution sans frais.
     broker_cfg = dataclasses.replace(cfg, fees=dataclasses.replace(
         cfg.fees, maker=0, taker=0, slippage=0)) if no_fees else cfg

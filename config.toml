@@ -52,3 +52,6 @@ starting_balance = 1000.0
 
 [journal]
 path = "data/journal.sqlite"
+
+[macos]
+notifications = true         # Centre de notifications : achats, sorties, arrêt du bot

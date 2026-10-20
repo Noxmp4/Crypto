@@ -1,10 +1,15 @@
 """Chargement de la configuration TOML en dataclasses typées."""
 from __future__ import annotations
 
-import tomllib
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # Python 3.9/3.10 (ex. /usr/bin/python3 de macOS)
+    import tomli as tomllib
 
 
 @dataclass
@@ -57,6 +62,8 @@ class Config:
     risk: RiskCfg = field(default_factory=RiskCfg)
     paper_balance: float = 1000.0
     journal_path: str = "data/journal.sqlite"
+    data_dir: str = "data"
+    notifications: bool = True
 
 
 def _dt(s: str) -> datetime:
@@ -64,9 +71,18 @@ def _dt(s: str) -> datetime:
 
 
 def load(path: str | Path = "config.toml") -> Config:
-    raw = tomllib.loads(Path(path).read_text())
+    """Les chemins relatifs sont résolus depuis le dossier du fichier de config,
+    pour que le bot fonctionne quel que soit le dossier courant (launchd, cron…)."""
+    path = Path(path).expanduser().resolve()
+    base = path.parent
+
+    def here(p: str) -> str:
+        return str((base / Path(p).expanduser()).resolve())
+
+    raw = tomllib.loads(path.read_text(encoding="utf-8"))
     risk = dict(raw.get("risk", {}))
     risk["blackout"] = [(_dt(a), _dt(b)) for a, b in risk.get("blackout", [])]
+    risk["kill_switch_file"] = here(risk.get("kill_switch_file", "data/STOP"))
     tf = raw.get("timeframes", {})
     return Config(
         mode=raw.get("mode", "paper"),
@@ -79,5 +95,7 @@ def load(path: str | Path = "config.toml") -> Config:
         strategy=StrategyCfg(**raw.get("strategy", {})),
         risk=RiskCfg(**risk),
         paper_balance=raw.get("paper", {}).get("starting_balance", 1000.0),
-        journal_path=raw.get("journal", {}).get("path", "data/journal.sqlite"),
+        journal_path=here(raw.get("journal", {}).get("path", "data/journal.sqlite")),
+        data_dir=here("data"),
+        notifications=raw.get("macos", {}).get("notifications", True),
     )

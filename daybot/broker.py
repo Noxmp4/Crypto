@@ -11,14 +11,13 @@ Interface commune, appelée par l'Engine à chaque bougie clôturée :
 """
 from __future__ import annotations
 
-import math
-import os
 import time
 import uuid
 from decimal import Decimal
 
 import pandas as pd
 
+from . import credentials
 from .config import Config
 from .journal import Trade
 
@@ -38,6 +37,23 @@ class PaperBroker:
         self.reserved: dict[int, float] = {}
         self.base: dict[str, float] = {}
         self.total_fees = 0.0
+
+    def restore(self, journal) -> None:
+        """Reconstruit soldes et positions depuis le journal (redémarrage launchd, reboot)."""
+        self.quote = self.cfg.paper_balance
+        self.reserved, self.base, self.total_fees = {}, {}, 0.0
+        for t in journal.closed():
+            self.quote += t.pnl
+            self.total_fees += t.entry_fee + t.exit_fee
+        for t in journal.active():
+            if t.status == "PENDING":
+                cost = t.entry_limit * t.base_size * (1 + self.cfg.fees.maker)
+                self.quote -= cost
+                self.reserved[t.id] = cost
+            else:
+                self.quote -= t.entry_price * t.base_size + t.entry_fee
+                self.base[t.product] = self.base.get(t.product, 0.0) + t.base_size
+                self.total_fees += t.entry_fee
 
     def available_quote(self) -> float:
         return self.quote
@@ -96,9 +112,9 @@ class PaperBroker:
 class LiveBroker:
     """Ordres réels via le SDK officiel `coinbase-advanced-py`.
 
-    Clés : variables d'environnement COINBASE_API_KEY / COINBASE_API_SECRET
-    (clé CDP « Trade » uniquement — JAMAIS la permission « Transfer »),
-    ou COINBASE_KEY_FILE pointant vers le JSON téléchargé.
+    Clés (clé CDP « Trade » uniquement — JAMAIS la permission « Transfer ») :
+    COINBASE_KEY_FILE, COINBASE_API_KEY / COINBASE_API_SECRET, ou le Trousseau
+    macOS (voir daybot/credentials.py).
     Le TP et le stop sont posés sur l'exchange (ordre bracket) dès le remplissage :
     la position reste protégée même si le bot plante.
     """
@@ -107,12 +123,7 @@ class LiveBroker:
         from coinbase.rest import RESTClient
 
         self.cfg = cfg
-        key_file = os.getenv("COINBASE_KEY_FILE")
-        if key_file:
-            self.client = RESTClient(key_file=key_file, rate_limit_headers=True)
-        else:
-            self.client = RESTClient(api_key=os.environ["COINBASE_API_KEY"],
-                                     api_secret=os.environ["COINBASE_API_SECRET"])
+        self.client = RESTClient(**credentials.credentials(), timeout=20)
         self._spec: dict[str, dict] = {}
 
     # ── utilitaires ──
@@ -196,7 +207,7 @@ class LiveBroker:
         t.entry_price = float(o["average_filled_price"])
         t.base_size = float(o["filled_size"])
         t.entry_fee = float(o.get("total_fees") or 0)
-        t.entry_time = o.get("last_fill_time") or _iso(pd.Timestamp.utcnow())
+        t.entry_time = o.get("last_fill_time") or _iso(pd.Timestamp.now(tz="UTC"))
 
     def cancel_entry(self, t: Trade) -> bool:
         """Annule ; renvoie True si un remplissage partiel doit être conservé."""
@@ -222,7 +233,7 @@ class LiveBroker:
             return False
         t.exit_price = float(o["average_filled_price"])
         t.exit_fee = float(o.get("total_fees") or 0)
-        t.exit_time = o.get("last_fill_time") or _iso(pd.Timestamp.utcnow())
+        t.exit_time = o.get("last_fill_time") or _iso(pd.Timestamp.now(tz="UTC"))
         t.exit_reason = "take_profit" if t.exit_price >= t.target * 0.999 else "stop"
         return True
 

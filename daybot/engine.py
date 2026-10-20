@@ -7,6 +7,7 @@ import pandas as pd
 
 from .config import Config
 from .journal import Journal, Trade
+from .notify import notify
 from .risk import RiskManager
 from .strategy import signal_at
 
@@ -18,8 +19,15 @@ class Engine:
         self.cfg, self.broker, self.journal = cfg, broker, journal
         self.risk = RiskManager(cfg)
         self.prices: dict[str, float] = {}
-        self.day = ""
-        self.day_start_equity = 0.0
+        # État conservé entre redémarrages : sans ça, un crash remettrait à zéro
+        # le drawdown max et la perte journalière.
+        self.risk.peak_equity = float(journal.get_state("peak_equity", "0"))
+        self.day = journal.get_state("day")
+        self.day_start_equity = float(journal.get_state("day_start_equity", "0"))
+        self._halt_notified = False
+
+    def _notify(self, title: str, msg: str) -> None:
+        notify(title, msg, self.cfg.notifications)
 
     def on_bar(self, product: str, df: pd.DataFrame, i: int) -> None:
         """`df` = features (strategy.features), `i` = index de la bougie clôturée."""
@@ -51,10 +59,18 @@ class Engine:
                 self.journal.save(t)
 
         equity = self.broker.equity(self.prices)
+        peak = self.risk.peak_equity
         self.risk.update_equity(equity)
+        if self.risk.peak_equity != peak:
+            self.journal.set_state("peak_equity", self.risk.peak_equity)
+        if self.risk.halted_reason and not self._halt_notified:
+            self._halt_notified = True
+            self._notify("daybot arrêté", self.risk.halted_reason)
         day = now.strftime("%Y-%m-%d")
         if day != self.day:
             self.day, self.day_start_equity = day, equity
+            self.journal.set_state("day", day)
+            self.journal.set_state("day_start_equity", equity)
 
         sig = signal_at(df, i, product, self.cfg)
         if sig is None or self.journal.active(product):
@@ -85,6 +101,8 @@ class Engine:
         t.status = "OPEN"
         self.broker.protect(t)
         log.info("%s position ouverte à %.4f", t.product, t.entry_price)
+        self._notify(f"daybot · {t.product}", f"Achat rempli à {t.entry_price:.4f} — "
+                     f"stop {t.stop:.4f}, objectif {t.target:.4f}")
         # Stop touché dans la bougie même du remplissage (simulation conservatrice).
         if check_stop and self.broker.poll_exit(t, bar, same_bar=True):
             self._closed(t)
@@ -93,3 +111,5 @@ class Engine:
         t.status = "CLOSED"
         log.info("%s sortie %s à %.4f — P&L net %.2f", t.product, t.exit_reason,
                  t.exit_price, t.pnl)
+        self._notify(f"daybot · {t.product}", f"Sortie {t.exit_reason} à {t.exit_price:.4f} — "
+                     f"P&L net {t.pnl:+.2f} {self.cfg.quote_currency}")

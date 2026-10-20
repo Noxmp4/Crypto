@@ -48,6 +48,15 @@ class Journal:
         self.db.row_factory = sqlite3.Row
         cols = ", ".join(f"{c} {'REAL' if c in _REAL else 'TEXT'}" for c in _COLS)
         self.db.execute(f"CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY, {cols})")
+        self.db.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)")
+        self.db.commit()
+
+    def get_state(self, key: str, default: str = "") -> str:
+        row = self.db.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def set_state(self, key: str, value) -> None:
+        self.db.execute("INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)", (key, str(value)))
         self.db.commit()
 
     def save(self, t: Trade) -> Trade:

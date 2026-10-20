@@ -50,7 +50,7 @@ def features(sig: pd.DataFrame, trend: pd.DataFrame, cfg: Config) -> pd.DataFram
     merged = pd.merge_asof(df.sort_values("known_at"), t[["trend_up"]],
                            left_on="known_at", right_index=True, direction="backward")
     merged.index = df.index
-    df["trend_up"] = merged["trend_up"].fillna(False).astype(bool)
+    df["trend_up"] = merged["trend_up"].eq(True)   # NaN (début d'historique) → False
     return df
 
 

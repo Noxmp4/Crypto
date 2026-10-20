@@ -1,8 +1,11 @@
 data/*.sqlite
 data/*.log
+data/*.log.*
 data/*.csv
 data/STOP
 *.json.key
 cdp_api_key*.json
 .env
 __pycache__/
+.venv/
+.DS_Store

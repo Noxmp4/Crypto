@@ -109,3 +109,103 @@ def test_backtest_runs_on_synthetic_trend():
     res = backtest.run(cfg, {"TEST-EUR": features(sig, trend, cfg)})
     assert res["trades"] > 0
     assert res["capital_final"] > 0
+
+
+# ── Portabilité macOS ──
+
+def test_paths_resolved_from_config_dir(tmp_path, monkeypatch):
+    cfg_file = tmp_path / "bot" / "config.toml"
+    cfg_file.parent.mkdir()
+    cfg_file.write_text('mode = "paper"\n[risk]\nkill_switch_file = "data/STOP"\n')
+    monkeypatch.chdir(tmp_path)                    # dossier courant ≠ dossier du bot
+    cfg = load(cfg_file)
+    assert cfg.journal_path == str(cfg_file.parent / "data" / "journal.sqlite")
+    assert cfg.risk.kill_switch_file == str(cfg_file.parent / "data" / "STOP")
+    assert cfg.data_dir == str(cfg_file.parent / "data")
+
+
+class _FakeKeyring:
+    def __init__(self):
+        self.store = {}
+
+    def get_password(self, service, name):
+        return self.store.get((service, name))
+
+    def set_password(self, service, name, value):
+        self.store[(service, name)] = value
+
+    def delete_password(self, service, name):
+        del self.store[(service, name)]
+
+
+def test_credentials_env_then_keychain(tmp_path, monkeypatch):
+    from daybot import credentials
+    kr = _FakeKeyring()
+    monkeypatch.setattr(credentials, "_keyring", lambda: kr)
+    for n in ("COINBASE_KEY_FILE", "COINBASE_API_KEY", "COINBASE_API_SECRET"):
+        monkeypatch.delenv(n, raising=False)
+    with pytest.raises(RuntimeError, match="keychain-import"):
+        credentials.credentials()
+
+    pem = "-----BEGIN EC PRIVATE KEY-----\nABC\n-----END EC PRIVATE KEY-----\n"
+    key = tmp_path / "cdp_api_key.json"
+    key.write_text('{"name": "organizations/o/apiKeys/k1", "privateKey": %s}' % __import__("json").dumps(pem))
+    assert credentials.import_key_file(str(key)).endswith("k1")
+    assert credentials.credentials() == {"api_key": "organizations/o/apiKeys/k1", "api_secret": pem}
+
+    monkeypatch.setenv("COINBASE_API_KEY", "env-key")          # l'environnement prime
+    assert credentials.credentials()["api_key"] == "env-key"
+    monkeypatch.setenv("COINBASE_KEY_FILE", "~/k.json")
+    assert credentials.credentials() == {"key_file": str(__import__("pathlib").Path("~/k.json").expanduser())}
+
+    credentials.forget()
+    assert kr.store == {}
+
+
+def test_notify_uses_osascript_argv_on_macos(monkeypatch):
+    from daybot import notify as nmod
+    calls = []
+    monkeypatch.setattr(nmod.sys, "platform", "darwin")
+    monkeypatch.setattr(nmod.shutil, "which", lambda _: "/usr/bin/osascript")
+    monkeypatch.setattr(nmod.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    assert nmod.notify('BTC-EUR "x"', "P&L +1.00")
+    cmd = calls[0]
+    assert cmd[0] == "osascript" and cmd[-2:] == ['BTC-EUR "x"', "P&L +1.00"]
+    assert not any('"x"' in part for part in cmd[:-2])            # jamais dans le script
+    assert not nmod.notify("t", "m", enabled=False)
+    monkeypatch.setattr(nmod.sys, "platform", "linux")
+    assert not nmod.notify("t", "m")
+
+
+def test_paper_restore_after_restart():
+    cfg = _cfg()
+    j = Journal()
+    br = PaperBroker(cfg, 1000)
+    closed = j.save(Trade("TEST-EUR", "x", 100, 98, 104, 1.0))
+    br.place_entry(closed); br.poll_entry(closed, _bar(101, 102, 99, 101))
+    br.poll_exit(closed, _bar(101, 105, 100.5, 104, "2026-10-20T11:00Z")); closed.status = "CLOSED"
+    j.save(closed)
+    opened = j.save(Trade("TEST-EUR", "y", 100, 98, 104, 2.0))
+    br.place_entry(opened); br.poll_entry(opened, _bar(101, 102, 99, 101)); opened.status = "OPEN"
+    j.save(opened)
+    pending = j.save(Trade("TEST-EUR", "z", 90, 88, 94, 1.0))
+    br.place_entry(pending); j.save(pending)
+
+    fresh = PaperBroker(cfg)
+    fresh.restore(j)
+    prices = {"TEST-EUR": 101.0}
+    assert fresh.available_quote() == pytest.approx(br.available_quote())
+    assert fresh.equity(prices) == pytest.approx(br.equity(prices))
+    assert fresh.total_fees == pytest.approx(br.total_fees)
+
+
+def test_engine_state_survives_restart():
+    from daybot.engine import Engine
+    cfg = _cfg()
+    j = Journal()
+    j.set_state("peak_equity", 1200); j.set_state("day", "2026-10-20")
+    j.set_state("day_start_equity", 1100)
+    eng = Engine(cfg, PaperBroker(cfg, 1000), j)
+    assert eng.risk.peak_equity == 1200 and eng.day_start_equity == 1100
+    eng.risk.update_equity(1000)       # −16,7 % depuis le plus haut conservé → arrêt
+    assert eng.risk.halted_reason

@@ -1,16 +1,17 @@
-"""CLI : python -m daybot {backtest|paper|live|status|export-tax}"""
+"""CLI : python -m daybot {backtest|paper|live|status|export-tax|keychain-import|keychain-forget}"""
 from __future__ import annotations
 
 import argparse
 import json
 import logging
+import logging.handlers
 import os
 import sys
 import time
 
 import pandas as pd
 
-from . import backtest, config, market
+from . import backtest, config, credentials, market
 from .broker import LiveBroker, PaperBroker
 from .engine import Engine
 from .journal import Journal
@@ -60,12 +61,19 @@ def main(argv: list[str] | None = None) -> int:
     lv.add_argument("--live", action="store_true", help="confirmation explicite du trading réel")
     sub.add_parser("status")
     ex = sub.add_parser("export-tax")
-    ex.add_argument("--out", default="data/cessions_2086.csv")
+    ex.add_argument("--out", default=None, help="défaut : data/cessions_2086.csv")
+    ki = sub.add_parser("keychain-import", help="range une clé CDP JSON dans le Trousseau macOS")
+    ki.add_argument("key_file")
+    sub.add_parser("keychain-forget", help="supprime la clé du Trousseau")
     a = ap.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
-                        handlers=[logging.StreamHandler(), logging.FileHandler("data/daybot.log")])
     cfg = config.load(a.config)
+    os.makedirs(cfg.data_dir, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[logging.StreamHandler(), logging.handlers.RotatingFileHandler(
+            os.path.join(cfg.data_dir, "daybot.log"), maxBytes=5_000_000, backupCount=3,
+            encoding="utf-8")])
 
     if a.cmd == "backtest":
         logging.getLogger("daybot").setLevel(logging.WARNING)
@@ -79,7 +87,9 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "paper":
         cfg.mode = "paper"
         journal = Journal(cfg.journal_path.replace(".sqlite", "_paper.sqlite"))
-        run_loop(cfg, PaperBroker(cfg), journal)
+        broker = PaperBroker(cfg)
+        broker.restore(journal)          # reprend le portefeuille fictif après un arrêt
+        run_loop(cfg, broker, journal)
 
     if a.cmd == "live":
         if not (a.live and cfg.mode == "live" and os.getenv("DAYBOT_LIVE_CONFIRM") == "OUI"):
@@ -102,8 +112,18 @@ def main(argv: list[str] | None = None) -> int:
                       f"stop {t.stop:.4f} TP {t.target:.4f}")
 
     if a.cmd == "export-tax":
-        n = Journal(cfg.journal_path).export_tax_csv(a.out)
-        print(f"{n} cessions exportées vers {a.out}")
+        out = a.out or os.path.join(cfg.data_dir, "cessions_2086.csv")
+        n = Journal(cfg.journal_path).export_tax_csv(out)
+        print(f"{n} cessions exportées vers {out}")
+
+    if a.cmd == "keychain-import":
+        name = credentials.import_key_file(a.key_file)
+        print(f"Clé {name.split('/')[-1]} enregistrée dans le Trousseau (service "
+              f"« {credentials.SERVICE} »). Vous pouvez supprimer {a.key_file}.")
+
+    if a.cmd == "keychain-forget":
+        credentials.forget()
+        print("Clé supprimée du Trousseau.")
     return 0
 
 
