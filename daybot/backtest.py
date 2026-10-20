@@ -14,18 +14,21 @@ from .journal import Journal
 from .strategy import features
 
 
-def load_data(cfg: Config, days: int) -> dict[str, pd.DataFrame]:
+def load_data(cfg: Config, days: int, progress=None) -> dict[str, pd.DataFrame]:
     out = {}
-    for p in cfg.products:
+    for k, p in enumerate(cfg.products, 1):
         n_sig = days * 86400 // market.SECONDS[cfg.signal_tf]
         n_tr = days * 86400 // market.SECONDS[cfg.trend_tf] + cfg.strategy.ema_trend * 3
+        if progress:
+            progress(f"[{k}/{len(cfg.products)}] Téléchargement {p} : {n_sig} bougies {cfg.signal_tf} "
+                     f"+ {n_tr} bougies {cfg.trend_tf}…")
         sig = market.candles(p, cfg.signal_tf, n_sig)
         tr = market.candles(p, cfg.trend_tf, n_tr)
         out[p] = features(sig, tr, cfg)
     return out
 
 
-def run(cfg: Config, data: dict[str, pd.DataFrame], no_fees: bool = False) -> dict:
+def run(cfg: Config, data: dict[str, pd.DataFrame], no_fees: bool = False, progress=None) -> dict:
     # Le backtest ignore kill switch / blackout réels.
     cfg = dataclasses.replace(cfg, notifications=False, risk=dataclasses.replace(
         cfg.risk, kill_switch_file="/nonexistent", blackout=[]))
@@ -37,7 +40,10 @@ def run(cfg: Config, data: dict[str, pd.DataFrame], no_fees: bool = False) -> di
     eng = Engine(cfg, broker, journal)
     events = sorted((ts, p, i) for p, df in data.items() for i, ts in enumerate(df.index))
     curve = []
-    for ts, p, i in events:
+    step = max(len(events) // 4, 1)
+    for n, (ts, p, i) in enumerate(events):
+        if progress and n and n % step == 0:
+            progress(f"  simulation {'sans' if no_fees else 'avec'} frais : {100 * n // len(events)} %")
         eng.on_bar(p, data[p], i)
         curve.append((ts, broker.equity(eng.prices)))
     for t in journal.active():       # clôture de fin de test

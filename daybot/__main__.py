@@ -6,7 +6,9 @@ import json
 import logging
 import logging.handlers
 import os
+import signal
 import sys
+import threading
 import time
 
 import pandas as pd
@@ -30,9 +32,24 @@ def run_loop(cfg: config.Config, broker, journal: Journal) -> None:
     eng = Engine(cfg, broker, journal)
     step = market.SECONDS[cfg.signal_tf]
     last_seen: dict[str, pd.Timestamp] = {}
-    log.info("Démarrage %s sur %s (bougies %s)", cfg.mode, ", ".join(cfg.products), cfg.signal_tf)
-    while True:
+    # Ctrl+C / SIGTERM : on termine la paire en cours avant de sortir, pour ne jamais
+    # quitter entre l'envoi d'un ordre et son enregistrement dans le journal.
+    stop = threading.Event()
+
+    def _ask_stop(signum, _frame):
+        if stop.is_set():                    # second Ctrl+C : sortie immédiate
+            raise KeyboardInterrupt
+        log.info("Arrêt demandé — fin du traitement en cours…")
+        stop.set()
+
+    signal.signal(signal.SIGINT, _ask_stop)
+    signal.signal(signal.SIGTERM, _ask_stop)
+    log.info("Démarrage %s sur %s (bougies %s) — Ctrl+C pour arrêter",
+             cfg.mode, ", ".join(cfg.products), cfg.signal_tf)
+    while not stop.is_set():
         for p in cfg.products:
+            if stop.is_set():
+                break
             try:
                 sig = _closed_only(market.candles(p, cfg.signal_tf, 300), cfg.signal_tf)
                 tr = _closed_only(market.candles(p, cfg.trend_tf, 300), cfg.trend_tf)
@@ -46,8 +63,9 @@ def run_loop(cfg: config.Config, broker, journal: Journal) -> None:
         if eng.risk.halted_reason:
             log.error(eng.risk.halted_reason)
         log.info("Capital estimé : %.2f %s", broker.equity(eng.prices), cfg.quote_currency)
-        # Réveil 10 s après la prochaine clôture de bougie.
-        time.sleep(step - time.time() % step + 10)
+        # Réveil 10 s après la prochaine clôture de bougie (interrompu par Ctrl+C).
+        stop.wait(step - time.time() % step + 10)
+    log.info("Bot arrêté. État sauvegardé dans %s — relancez pour reprendre.", cfg.data_dir)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -77,9 +95,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd == "backtest":
         logging.getLogger("daybot").setLevel(logging.WARNING)
-        data = backtest.load_data(cfg, a.days)
-        res = backtest.run(cfg, data)
-        gross = backtest.run(cfg, data, no_fees=True)
+        # Progression sur stderr : stdout ne contient que le JSON final.
+        def say(msg: str) -> None:
+            print(msg, file=sys.stderr, flush=True)
+
+        t0 = time.time()
+        say(f"Backtest {a.days} jours sur {', '.join(cfg.products)} — compter 1 à 3 minutes.")
+        data = backtest.load_data(cfg, a.days, progress=say)
+        res = backtest.run(cfg, data, progress=say)
+        gross = backtest.run(cfg, data, no_fees=True, progress=say)
+        say(f"Terminé en {time.time() - t0:.0f} s.")
         res["rendement_sans_frais_pct"] = gross["rendement_pct"]
         print(json.dumps(res, indent=2, ensure_ascii=False))
         return 0
@@ -128,4 +153,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        # Le journal est écrit à chaque événement : rien n'est perdu. En live, les
+        # ordres stop/TP restent actifs chez Coinbase.
+        print("\nArrêt demandé (Ctrl+C). État sauvegardé dans data/ — relancez pour reprendre.",
+              file=sys.stderr)
+        sys.exit(130)

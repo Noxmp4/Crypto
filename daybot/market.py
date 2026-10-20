@@ -13,11 +13,16 @@ SECONDS = {
 }
 MAX_PER_CALL = 300
 
+# Une seule session HTTP réutilisée : sans elle, chaque requête refait une poignée de
+# main TLS complète, ce qui rendait le téléchargement d'un long historique très lent.
+_session = requests.Session()
+_session.headers["User-Agent"] = "daybot/1.0"
+
 
 def _get(path: str, params: dict | None = None, retries: int = 4) -> dict:
     for i in range(retries):
         try:
-            r = requests.get(f"{BASE}{path}", params=params, timeout=15)
+            r = _session.get(f"{BASE}{path}", params=params, timeout=15)
             if r.status_code == 429:
                 raise requests.HTTPError("rate limited")
             r.raise_for_status()
