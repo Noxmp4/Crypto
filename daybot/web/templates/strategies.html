@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Stratégies{% endblock %}
+{% macro pct(v) %}{% if v is none %}—{% else %}<span class="{{ 'up' if v >= 0 else 'down' }}">{{ '+' if v >= 0 }}{{ "%.2f"|format(v) }} %</span>{% endif %}{% endmacro %}
+{% block content %}
+<section class="card">
+  <h2>Critères de passage en réel</h2>
+  {% if promo.sleeves %}
+  {% for s, r in promo.sleeves.items() %}
+  <h3>{{ SLEEVE_NAMES.get(s, s) }} {% if r.live_since and r.live_allowed %}<span class="status good">● en réel depuis {{ r.live_since[:10] }}</span>{% elif r.eligible %}<span class="status good">✓ éligible</span>{% else %}<span class="status warning">… paper</span>{% endif %}</h3>
+  <ul class="checks">{% for c in r.checks %}<li>{% if c.ok %}<span class="status good">✓</span>{% else %}<span class="status critical">✕</span>{% endif %} {{ c.label }} <span class="muted">— {{ c.detail }}</span></li>{% endfor %}
+    <li>{% if r.auto %}<span class="status good">✓</span>{% else %}<span class="status critical">✕</span>{% endif %} Promotion automatique active</li>
+    <li>{% if not r.demoted %}<span class="status good">✓</span>{% else %}<span class="status critical">✕</span>{% endif %} Poche non rétrogradée</li></ul>
+  {% endfor %}
+  <p class="muted">Évalué le {{ promo.date[:16]|replace("T"," ") if promo.date }} UTC.</p>
+  {% else %}<p class="empty">Pas encore évalué.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Validation de la stratégie tendance</h2>
+  {% if research and research.tendance %}
+  <p class="muted">Paramètres fixés à l'avance, non optimisés. Capital de la poche : {{ cfg.trend.capital_eur|eur }}. Calculé le {{ research.date[:10] }}.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>Période</th><th>Rendement</th><th>Annualisé</th><th>Drawdown max</th><th>Trades</th><th>Réussite</th><th>Profit factor</th><th>Frais</th></tr></thead>
+    <tbody>{% for key, label in [("dans_echantillon","Référence 2018–2022"),("hors_echantillon","Hors échantillon 2023 →"),("complet","Complet")] %}{% set d = research.tendance[key] %}<tr>
+      <td>{{ label }}<br><span class="muted">{{ d.periode }}</span></td><td>{{ pct(d.rendement_pct) }}</td><td>{{ pct(d.rendement_annualise_pct) }}</td>
+      <td>{{ "%.1f"|format(d.max_drawdown_pct) }} %</td><td>{{ d.trades }}</td><td>{{ d.taux_reussite_pct }} %</td>
+      <td>{{ d.profit_factor if d.profit_factor is not none else "—" }}</td><td>{{ d.frais_payes|eur }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <h3>Par année</h3>
+  <div class="scroll"><table><thead><tr>{% for y in research.tendance.complet.par_annee_pct %}<th>{{ y }}</th>{% endfor %}</tr></thead>
+    <tbody><tr>{% for v in research.tendance.complet.par_annee_pct.values() %}<td>{{ pct(v) }}</td>{% endfor %}</tr></tbody></table></div>
+  <h3>Pour comparaison : conserver les actifs (buy &amp; hold) hors échantillon</h3>
+  <ul class="plain">{% for p, v in research.tendance.hors_echantillon.buy_and_hold_pct.items() %}<li>{{ p }} : {{ pct(v) }}</li>{% endfor %}</ul>
+  {% else %}<p class="empty">Backtest pas encore calculé (chaque dimanche, et au premier démarrage).</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>DCA : simple contre « tilt »</h2>
+  {% if research and research.dca %}
+  <div class="scroll"><table>
+    <thead><tr><th>Variante</th><th>Période</th><th>Investi</th><th>Valeur</th><th>Gain</th><th>Pire moins-value</th></tr></thead>
+    <tbody>{% for key, label in [("dca","DCA simple"),("dca_tilt","DCA tilt (×1,5 sous SMA200)")] %}{% set d = research[key] %}<tr>
+      <td>{{ label }}</td><td>{{ d.periode }}</td><td>{{ d.investi|eur }}</td><td>{{ d.valeur|eur }}</td><td>{{ pct(d.gain_pct) }}</td><td>{{ d.pire_moins_value_eur|eur }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <p class="muted">Le tilt investit davantage quand les prix sont bas : les montants investis diffèrent, comparez les gains en %. Tilt actuellement {{ "activé" if cfg.dca.tilt else "désactivé" }} (<code>[sleeves.dca] tilt</code>).</p>
+  {% else %}<p class="empty">Pas encore calculé.</p>{% endif %}
+</section>
+{% endblock %}

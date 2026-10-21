@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Santé{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>État</h2>
+  <div class="tiles">
+    <div class="tile"><div class="label">Dernier signe de vie du bot</div><div class="value">{% if bot_age is none %}—{% else %}{{ (bot_age|int) }} s{% endif %}</div></div>
+    <div class="tile"><div class="label">Budget IA du mois</div><div class="value">{{ "%.2f"|format(spent) }} $</div><div class="sub">sur {{ "%.0f"|format(cfg.ai.monthly_budget_usd) }} $</div></div>
+    <div class="tile"><div class="label">Frais Coinbase</div><div class="value">{{ "%.2f"|format(cfg.fees.maker * 100) }} % / {{ "%.2f"|format(cfg.fees.taker * 100) }} %</div><div class="sub">maker / taker {% if fees.pricing_tier %}· palier {{ fees.pricing_tier }}{% endif %}</div></div>
+  </div>
+  {% if usage %}<div class="scroll"><table><thead><tr><th>Appel IA</th><th>Nombre</th><th>Coût</th></tr></thead>
+    <tbody>{% for u in usage %}<tr><td>{{ u.kind }}</td><td>{{ u.n }}</td><td>{{ "%.3f"|format(u.c or 0) }} $</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+</section>
+<section class="card">
+  <h2>Événements récents</h2>
+  {% if events %}<div class="scroll"><table>
+    <thead><tr><th>Date (UTC)</th><th>Niveau</th><th>Source</th><th>Message</th></tr></thead>
+    <tbody>{% for e in events %}<tr>
+      <td>{{ e.created[:19]|replace("T"," ") }}</td>
+      <td>{% if e.level == "ERROR" %}<span class="status critical">✕ erreur</span>{% elif e.level == "WARNING" %}<span class="status warning">⚠ alerte</span>{% else %}<span class="status good">● info</span>{% endif %}</td>
+      <td>{{ e.source }}</td><td>{{ e.message }}</td></tr>{% endfor %}</tbody>
+  </table></div>{% else %}<p class="empty">Aucun événement.</p>{% endif %}
+</section>
+{% endblock %}

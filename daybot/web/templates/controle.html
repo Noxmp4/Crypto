@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Contrôle{% endblock %}
+{% macro action(kind, label, cls="", extra={}) %}
+<form method="post" action="/commande" class="action">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/controle">
+  <input type="hidden" name="kind" value="{{ kind }}">
+  {% for k, v in extra.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+  <label class="confirm"><input type="checkbox" name="confirm" value="oui" required> Je confirme</label>
+  <button type="submit" class="{{ cls }}">{{ label }}</button>
+</form>
+{% endmacro %}
+{% block content %}
+<section class="card">
+  <h2>Trading</h2>
+  <p>Ces actions bloquent ou débloquent les <strong>nouvelles</strong> entrées. Les positions ouvertes restent protégées par leurs stops posés chez Coinbase.</p>
+  <div class="actions">
+    {% if paused %}{{ action("resume", "Reprendre le trading") }}{% else %}{{ action("pause", "Mettre en pause", "secondary") }}{% endif %}
+    {% if killed %}{{ action("kill_off", "Retirer le kill switch") }}{% else %}{{ action("kill_on", "Activer le kill switch", "danger") }}{% endif %}
+  </div>
+</section>
+
+<section class="card">
+  <h2>Passage en réel</h2>
+  <p>Promotion automatique : <strong>{{ "active" if auto else "coupée" }}</strong>. La couper n'arrête pas une poche déjà en réel ; pour cela, rétrogradez-la.</p>
+  <div class="actions">
+    {% if auto %}{{ action("auto_off", "Couper la promotion automatique", "secondary") }}{% else %}{{ action("auto_on", "Réactiver la promotion automatique") }}{% endif %}
+  </div>
+  <div class="scroll"><table>
+    <thead><tr><th>Poche</th><th>État</th><th>Action</th></tr></thead>
+    <tbody>{% for s in sleeves %}{% set r = (promo.sleeves or {}).get(s, {}) %}<tr>
+      <td>{{ SLEEVE_NAMES.get(s, s) }}</td>
+      <td>{% if r.demoted %}rétrogradée en paper{% elif r.live_since %}réel depuis {{ r.live_since[:10] }}{% else %}paper{% endif %}</td>
+      <td>{% if r.demoted %}{{ action("undemote", "Lever la rétrogradation", "", {"sleeve": s}) }}
+          {% else %}{{ action("demote", "Rétrograder en paper", "danger", {"sleeve": s}) }}{% endif %}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+
+<section class="card">
+  <h2>Clôturer une position</h2>
+  {% if open_trades %}<div class="scroll"><table>
+    <thead><tr><th>Mode</th><th>Poche</th><th>Paire</th><th>Entrée</th><th>Stop</th><th></th></tr></thead>
+    <tbody>{% for mode, t in open_trades %}<tr><td>{{ "réel" if mode == "live" else "paper" }}</td><td>{{ SLEEVE_NAMES.get(t.sleeve, t.sleeve) }}</td>
+      <td>{{ t.product }}</td><td>{{ t.entry_price|round(4) }}</td><td>{{ t.stop|round(4) }}</td>
+      <td>{{ action("close_trade", "Vendre au marché", "danger", {"mode": mode, "trade_id": t.id}) }}</td></tr>{% endfor %}</tbody>
+  </table></div>{% else %}<p class="empty">Aucune position ouverte.</p>{% endif %}
+  <p class="muted">Les avoirs DCA ne sont jamais vendus par le bot.</p>
+</section>
+
+<section class="card">
+  <h2>Historique des commandes</h2>
+  {% if commands %}<div class="scroll"><table>
+    <thead><tr><th>Date (UTC)</th><th>Commande</th><th>Par</th><th>Statut</th><th>Résultat</th></tr></thead>
+    <tbody>{% for c in commands %}<tr><td>{{ c.created[:16]|replace("T"," ") }}</td><td>{{ c.kind }}</td><td>{{ c.author }}</td>
+      <td>{{ c.status }}</td><td>{{ (c.result or "")[:200] }}</td></tr>{% endfor %}</tbody>
+  </table></div>{% else %}<p class="empty">Aucune commande.</p>{% endif %}
+</section>
+{% endblock %}

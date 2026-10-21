@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Tableau de bord{% endblock %}
+{% macro money(v) %}{% if v is none %}—{% else %}{{ v|eur }}{% endif %}{% endmacro %}
+{% macro signed(v) %}{% if v is none %}—{% else %}<span class="{{ 'up' if v >= 0 else 'down' }}">{{ '+' if v >= 0 }}{{ v|eur }}</span>{% endif %}{% endmacro %}
+{% block content %}
+{% for mode, summ in [("live", live), ("paper", paper)] if summ %}
+<section class="card">
+  <h2>{{ "Compte réel" if mode == "live" else "Simulation (paper)" }}</h2>
+  <div class="tiles">
+    <div class="tile"><div class="label">Capital total</div><div class="value">{{ money(summ.last.total) }}</div></div>
+    <div class="tile"><div class="label">Poche tendance</div><div class="value">{{ money(summ.last.trend) }}</div>
+      <div class="sub">réalisé {{ signed(summ.realized.trend) }}</div></div>
+    <div class="tile"><div class="label">Cœur DCA (valeur)</div><div class="value">{{ money(summ.last.dca) }}</div></div>
+    <div class="tile"><div class="label">Trades clôturés</div><div class="value">{{ summ.closed_count }}</div></div>
+  </div>
+  {{ charts[mode] }}
+  <h3>Positions ouvertes</h3>
+  {% if summ.positions %}
+  <div class="scroll"><table>
+    <thead><tr><th>Poche</th><th>Paire</th><th>Statut</th><th>Entrée</th><th>Stop</th><th>Prix</th><th>Latent</th></tr></thead>
+    <tbody>{% for p in summ.positions %}<tr>
+      <td>{{ p.sleeve }}</td><td>{{ p.t.product }}</td><td>{{ p.t.status }}</td>
+      <td>{{ (p.t.entry_price or p.t.entry_limit)|round(4) }}</td><td>{{ p.t.stop|round(4) }}</td>
+      <td>{{ p.price|round(4) if p.price else "—" }}</td><td>{{ signed(p.latent) }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="empty">Aucune position ouverte.</p>{% endif %}
+  <h3>Cœur DCA</h3>
+  {% if summ.holdings %}
+  <div class="scroll"><table>
+    <thead><tr><th>Paire</th><th>Quantité</th><th>Prix moyen</th><th>Investi</th><th>Valeur</th><th>Plus/moins-value latente</th></tr></thead>
+    <tbody>{% for h in summ.holdings %}<tr>
+      <td>{{ h.product }}</td><td>{{ "%.8f"|format(h.qty) }}</td><td>{{ h.avg_price|eur }}</td>
+      <td>{{ h.cost|eur }}</td><td>{{ money(h.value) }}</td><td>{{ signed(h.gain) }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="empty">Aucun achat DCA pour l'instant (lundi {{ "%02d"|format(cfg.dca.hour) }} h, heure de Paris).</p>{% endif %}
+</section>
+{% else %}
+<section class="card"><p class="empty">Le bot n'a encore écrit aucun journal. Lancez <code>python -m daybot run</code>.</p></section>
+{% endfor %}
+
+<section class="card">
+  <h2>Dernière analyse IA</h2>
+  {% if report %}
+  <p class="regime">Régime : <strong>{{ report.regime }}</strong> · multiplicateur de risque {{ report.controles.risk_multiplier if report.controles else "—" }}</p>
+  {% for p in report.resume|paragraphs %}<p>{{ p }}</p>{% endfor %}
+  <p><a href="/analyse">Rapport complet et questions →</a></p>
+  {% else %}<p class="empty">Pas encore de rapport (tous les jours à {{ "%02d"|format(cfg.ai.daily_hour) }} h {{ "%02d"|format(cfg.ai.daily_minute) }}, heure de Paris).</p>{% endif %}
+  <p class="muted">Budget IA du mois : {{ "%.2f"|format(spent) }} $ / {{ "%.0f"|format(cfg.ai.monthly_budget_usd) }} $</p>
+</section>
+
+<section class="card">
+  <h2>Passage en réel</h2>
+  {% if promo.sleeves %}
+  <ul class="plain">{% for s, r in promo.sleeves.items() %}
+    <li>{% if r.live_since and r.live_allowed %}<span class="status good">● Réel</span>{% elif r.eligible %}<span class="status good">✓ Éligible</span>{% else %}<span class="status warning">… Paper</span>{% endif %}
+      {{ SLEEVE_NAMES.get(s, s) }} — {{ r.checks|selectattr("ok")|list|length }}/{{ r.checks|length }} critères</li>{% endfor %}</ul>
+  <p><a href="/strategies">Détail des critères →</a></p>
+  {% else %}<p class="empty">Évaluation pas encore faite.</p>{% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Trades{% endblock %}
+{% block content %}
+{% for mode, d in modes.items() %}
+<section class="card">
+  <h2>{{ "Compte réel" if mode == "live" else "Simulation (paper)" }}</h2>
+  <p><a class="button secondary" href="/export/{{ mode }}.csv">Télécharger les cessions (CSV, formulaire 2086)</a></p>
+  <h3>Trades (poches à position)</h3>
+  {% if d.trades %}<div class="scroll"><table>
+    <thead><tr><th>#</th><th>Poche</th><th>Paire</th><th>Statut</th><th>Entrée</th><th>Sortie</th><th>Motif</th><th>Frais</th><th>P&amp;L net</th></tr></thead>
+    <tbody>{% for t in d.trades %}<tr>
+      <td>{{ t.id }}</td><td>{{ SLEEVE_NAMES.get(t.sleeve, t.sleeve) }}</td><td>{{ t.product }}</td><td>{{ t.status }}</td>
+      <td>{{ t.entry_time[:16]|replace("T"," ") }} {{ t.entry_price|round(4) if t.entry_price else "" }}</td>
+      <td>{{ t.exit_time[:16]|replace("T"," ") }} {{ t.exit_price|round(4) if t.exit_price else "" }}</td>
+      <td>{{ t.exit_reason }}</td><td>{{ (t.entry_fee + t.exit_fee)|eur }}</td>
+      <td>{% if t.status == "CLOSED" %}<span class="{{ 'up' if t.pnl >= 0 else 'down' }}">{{ '+' if t.pnl >= 0 }}{{ t.pnl|eur }}</span>{% else %}—{% endif %}</td></tr>{% endfor %}</tbody>
+  </table></div>{% else %}<p class="empty">Aucun trade.</p>{% endif %}
+  <h3>Achats DCA</h3>
+  {% if d.lots %}<div class="scroll"><table>
+    <thead><tr><th>#</th><th>Paire</th><th>Statut</th><th>Créé</th><th>Montant</th><th>Prix</th><th>Quantité</th><th>Frais</th></tr></thead>
+    <tbody>{% for l in d.lots %}<tr><td>{{ l.id }}</td><td>{{ l.product }}</td><td>{{ l.status }}</td>
+      <td>{{ l.created[:16]|replace("T"," ") }}</td><td>{{ l.quote_amount|eur }}</td>
+      <td>{{ l.price|round(4) if l.price else l.limit_price|round(4) }}</td><td>{{ "%.8f"|format(l.base_size) }}</td><td>{{ l.fee|eur }}</td></tr>{% endfor %}</tbody>
+  </table></div>{% else %}<p class="empty">Aucun achat DCA.</p>{% endif %}
+</section>
+{% else %}
+<section class="card"><p class="empty">Aucun journal pour l'instant.</p></section>
+{% endfor %}
+{% endblock %}

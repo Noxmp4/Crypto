@@ -1,0 +1,63 @@
+# daybot sur un VPS : bot + site web + tunnel Cloudflare. Aucun port n'est publié :
+# le site n'est joignable que par le tunnel, derrière Cloudflare Access.
+#   docker compose up -d --build      démarrer / mettre à jour
+#   docker compose logs -f bot        suivre le bot
+#   docker compose stop bot           arrêter le bot (les stops restent posés chez Coinbase)
+name: daybot
+
+x-app: &app
+  build: .
+  image: daybot:local
+  restart: unless-stopped
+  read_only: true
+  tmpfs: ["/tmp"]
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  volumes:
+    - ./data:/app/data
+    - ./config.toml:/app/config.toml:ro
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "3"}
+
+services:
+  bot:
+    <<: *app
+    command: ["python", "-m", "daybot", "--config", "/app/config.toml", "run"]
+    environment:
+      # Accord explicite pour le trading réel : passer à OUI dans .env, jamais par défaut.
+      DAYBOT_LIVE_CONFIRM: ${DAYBOT_LIVE_CONFIRM:-NON}
+      COINBASE_KEY_FILE: /run/secrets/coinbase_key
+      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_key
+    secrets: [coinbase_key, anthropic_key]
+
+  web:
+    <<: *app
+    # Le site ne reçoit aucun secret Coinbase ni Anthropic.
+    command: ["python", "-m", "daybot", "--config", "/app/config.toml", "web",
+              "--host", "0.0.0.0", "--port", "8080"]
+    expose: ["8080"]
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    depends_on: [bot]
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.3
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?définir TUNNEL_TOKEN dans .env}
+    depends_on: [web]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+secrets:
+  coinbase_key:
+    file: ./secrets/cdp_api_key.json      # « {} » tant que tu restes en paper
+  anthropic_key:
+    file: ./secrets/anthropic_api_key     # vide = pas d'analyse IA

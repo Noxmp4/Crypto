@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Analyse IA{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>Demander à l'analyste</h2>
+  <form method="post" action="/commande" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/analyse">
+    <input type="hidden" name="kind" value="ask">
+    <label for="q">Votre question (contexte du portefeuille et du marché joint automatiquement)</label>
+    <textarea id="q" name="question" rows="3" maxlength="2000" required placeholder="Ex. : vu le marché, faut-il garder la répartition DCA 70/30 ?"></textarea>
+    <button type="submit">Envoyer la question</button>
+  </form>
+  <form method="post" action="/commande" class="inline">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/analyse">
+    <input type="hidden" name="kind" value="analyze_now">
+    <button type="submit" class="secondary">Générer un rapport maintenant</button>
+  </form>
+  <p class="muted">Budget du mois : {{ "%.2f"|format(spent) }} $ / {{ "%.0f"|format(cfg.ai.monthly_budget_usd) }} $ · {{ cfg.ai.max_questions_per_day }} questions par jour au maximum · modèle {{ cfg.ai.model }}.</p>
+  {% if pending %}<p class="status warning">… {{ pending|length }} demande(s) en cours de traitement — rechargez dans une minute.</p>{% endif %}
+</section>
+
+{% for a in answers %}
+<section class="card">
+  <h3>Question du {{ a.created[:16]|replace("T", " ") }}</h3>
+  <blockquote>{{ a.question }}</blockquote>
+  {% for p in a.reponse|paragraphs %}<p>{{ p }}</p>{% endfor %}
+  {% if a.sources %}<details><summary>Sources ({{ a.sources|length }})</summary><ul>
+    {% for s in a.sources %}<li><a href="{{ s.url|safe_url }}" rel="noopener noreferrer nofollow" target="_blank">{{ s.titre or s.url }}</a> {{ s.date }}</li>{% endfor %}
+  </ul></details>{% endif %}
+  <p class="muted">Coût {{ "%.3f"|format(a.cost or 0) }} $</p>
+</section>
+{% endfor %}
+
+{% for r in reports %}
+<section class="card">
+  <h2>Rapport du {{ r.created[:16]|replace("T", " ") }} UTC</h2>
+  <p class="regime">Régime : <strong>{{ r.regime }}</strong>{% if r.controles %} · multiplicateur de risque appliqué : <strong>{{ r.controles.risk_multiplier }}</strong> jusqu'au {{ r.controles.risk_until[:16]|replace("T", " ") }} UTC{% endif %}</p>
+  {% for p in r.resume|paragraphs %}<p>{{ p }}</p>{% endfor %}
+  {% if r.actifs %}<div class="scroll"><table>
+    <thead><tr><th>Paire</th><th>Tendance</th><th>Supports</th><th>Résistances</th><th>Commentaire</th></tr></thead>
+    <tbody>{% for a in r.actifs %}<tr><td>{{ a.paire }}</td><td>{{ a.tendance }}</td>
+      <td>{{ a.supports|join(", ") }}</td><td>{{ a.resistances|join(", ") }}</td><td>{{ a.commentaire }}</td></tr>{% endfor %}</tbody>
+  </table></div>{% endif %}
+  {% if r.scenarios %}<h3>Scénarios</h3><ul>{% for s in r.scenarios %}<li><strong>{{ s.nom }}</strong> — si {{ s.declencheurs }} : {{ s.implications }}</li>{% endfor %}</ul>{% endif %}
+  {% if r.conseils %}<h3>Conseils</h3><ul>{% for c in r.conseils %}<li>{{ c.texte }} <span class="muted">({{ c.horizon }})</span></li>{% endfor %}</ul>{% endif %}
+  {% if r.risques %}<h3>Risques</h3><ul>{% for x in r.risques %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+  {% if r.controles and r.controles.blackouts %}<h3>Fenêtres sans nouvelle entrée</h3><ul>{% for b in r.controles.blackouts %}<li>{{ b.debut|replace("T"," ") }} → {{ b.fin|replace("T"," ") }} : {{ b.motif }}</li>{% endfor %}</ul>{% endif %}
+  {% if r.sources %}<details><summary>Sources ({{ r.sources|length }})</summary><ul>
+    {% for s in r.sources %}<li><a href="{{ s.url|safe_url }}" rel="noopener noreferrer nofollow" target="_blank">{{ s.titre or s.url }}</a> {{ s.date }}</li>{% endfor %}
+  </ul></details>{% endif %}
+  <p class="muted">{{ r.avertissement }} · coût {{ "%.3f"|format(r.cost or 0) }} $</p>
+</section>
+{% else %}
+<section class="card"><p class="empty">Aucun rapport pour l'instant. Il faut une clé <code>ANTHROPIC_API_KEY</code> sur le VPS.</p></section>
+{% endfor %}
+{% endblock %}

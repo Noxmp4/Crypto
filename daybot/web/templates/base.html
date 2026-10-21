@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>daybot · {% block title %}{% endblock %}</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">daybot</a>
+  <nav>
+    {% for key, label in [("dashboard","Tableau de bord"),("analyse","Analyse IA"),("trades","Trades"),("strategies","Stratégies"),("controle","Contrôle"),("sante","Santé")] %}
+    <a href="{{ '/' if key == 'dashboard' else '/' ~ key }}" {% if nav == key %}aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}
+  </nav>
+  <span class="who">{{ email }}</span>
+</header>
+<div class="status-row">
+  {% if bot_ok %}<span class="status good">● Bot actif</span>
+  {% elif bot_age is none %}<span class="status critical">✕ Bot jamais démarré</span>
+  {% else %}<span class="status critical">✕ Bot muet depuis {{ (bot_age // 60)|int }} min</span>{% endif %}
+  {% if paused %}<span class="status warning">❚❚ Pause manuelle</span>{% endif %}
+  {% if killed %}<span class="status critical">■ Kill switch actif</span>{% endif %}
+  {% if dev %}<span class="status warning">⚠ Mode développement (sans authentification)</span>{% endif %}
+</div>
+{% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+<main>
+{% block content %}{% endblock %}
+</main>
+<footer>Information éducative, pas un conseil en investissement. Les cryptoactifs sont très volatils : vous pouvez perdre tout ou partie du capital.</footer>
+</body>
+</html>

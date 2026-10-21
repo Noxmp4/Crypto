@@ -1,4 +1,8 @@
-"""CLI : python -m daybot {backtest|paper|live|status|export-tax|keychain-import|keychain-forget}"""
+"""CLI : python -m daybot {run|web|research|promotion|backtest|paper|live|status|export-tax|
+keychain-import|keychain-forget}
+
+`run` est le mode prévu pour le VPS (paper ombre + réel automatique + IA + planificateur) ;
+`paper` et `live` sont les boucles intraday v1, conservées."""
 from __future__ import annotations
 
 import argparse
@@ -72,6 +76,12 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="daybot")
     ap.add_argument("--config", default="config.toml")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("run", help="processus permanent (VPS) : paper ombre, réel automatique, IA")
+    w = sub.add_parser("web", help="site web (FastAPI)")
+    w.add_argument("--host", default=None)
+    w.add_argument("--port", type=int, default=None)
+    sub.add_parser("research", help="backtests tendance (hors échantillon) et DCA")
+    sub.add_parser("promotion", help="critères de passage en réel, poche par poche")
     b = sub.add_parser("backtest")
     b.add_argument("--days", type=int, default=60)
     sub.add_parser("paper")
@@ -93,6 +103,41 @@ def main(argv: list[str] | None = None) -> int:
             os.path.join(cfg.data_dir, "daybot.log"), maxBytes=5_000_000, backupCount=3,
             encoding="utf-8")])
 
+    if a.cmd == "run":
+        from .runner import Runner
+        Runner(cfg).run_forever()
+        return 0
+
+    if a.cmd == "web":
+        import uvicorn
+
+        from .web.app import create_app
+        host = a.host or cfg.web.host
+        if os.getenv("DAYBOT_WEB_DEV") == "1" and host not in ("127.0.0.1", "localhost", "::1"):
+            print("Mode développement (sans authentification) refusé hors de 127.0.0.1.",
+                  file=sys.stderr)
+            return 2
+        uvicorn.run(create_app(cfg), host=host, port=a.port or cfg.web.port,
+                    proxy_headers=True, forwarded_allow_ips="*", log_level="info")
+        return 0
+
+    if a.cmd == "research":
+        logging.getLogger("daybot").setLevel(logging.WARNING)
+        res = backtest.research(cfg, progress=lambda m: print(m, file=sys.stderr, flush=True))
+        Journal(cfg.control_path).set_json("research", res)
+        print(json.dumps(res, indent=2, ensure_ascii=False, default=float))
+        return 0
+
+    if a.cmd == "promotion":
+        from . import promotion
+        res = promotion.evaluate(cfg, Journal(cfg.paper_journal_path), Journal(cfg.control_path))
+        for sleeve, r in res.items():
+            print(f"{sleeve}: {'ÉLIGIBLE' if r['eligible'] else 'paper'}"
+                  f"{' — en réel depuis ' + r['live_since'] if r['live_since'] else ''}")
+            for c in r["checks"]:
+                print(f"  [{'x' if c['ok'] else ' '}] {c['label']} — {c['detail']}")
+        return 0
+
     if a.cmd == "backtest":
         logging.getLogger("daybot").setLevel(logging.WARNING)
         # Progression sur stderr : stdout ne contient que le JSON final.
@@ -111,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd == "paper":
         cfg.mode = "paper"
-        journal = Journal(cfg.journal_path.replace(".sqlite", "_paper.sqlite"))
+        journal = Journal(cfg.paper_journal_path)
         broker = PaperBroker(cfg)
         broker.restore(journal)          # reprend le portefeuille fictif après un arrêt
         run_loop(cfg, broker, journal)
@@ -126,15 +171,16 @@ def main(argv: list[str] | None = None) -> int:
         run_loop(cfg, broker, Journal(cfg.journal_path))
 
     if a.cmd == "status":
-        for path in (cfg.journal_path, cfg.journal_path.replace(".sqlite", "_paper.sqlite")):
+        for path in (cfg.journal_path, cfg.paper_journal_path):
             if not os.path.exists(path):
                 continue
             j = Journal(path)
             closed = j.closed()
             print(f"{path}: {len(closed)} trades clôturés, P&L net {sum(t.pnl for t in closed):.2f}")
             for t in j.active():
-                print(f"  {t.status} {t.product} entrée {t.entry_price or t.entry_limit:.4f} "
-                      f"stop {t.stop:.4f} TP {t.target:.4f}")
+                tp = f" TP {t.target:.4f}" if t.has_target else ""
+                print(f"  {t.status} [{t.sleeve}] {t.product} entrée "
+                      f"{t.entry_price or t.entry_limit:.4f} stop {t.stop:.4f}{tp}")
 
     if a.cmd == "export-tax":
         out = a.out or os.path.join(cfg.data_dir, "cessions_2086.csv")

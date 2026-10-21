@@ -53,8 +53,10 @@ cat <<MSG
 
 ✅ Installation terminée dans $ROOT
 
-  Backtest :    scripts/run_macos.sh backtest --days 180
-  Paper :       scripts/run_macos.sh paper
+  Recherche :   scripts/run_macos.sh research
+  Bot complet : scripts/run_macos.sh run
+  Site local :  DAYBOT_WEB_DEV=1 scripts/run_macos.sh web   (http://127.0.0.1:8080)
   Statut :      scripts/run_macos.sh status
   Clé API :     scripts/run_macos.sh keychain-import ~/Downloads/cdp_api_key.json
+  Pour du 24/7 : voir DEPLOY.md (VPS + Cloudflare).
 MSG

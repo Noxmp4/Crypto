@@ -9,3 +9,7 @@ cdp_api_key*.json
 __pycache__/
 .venv/
 .DS_Store
+secrets/
+.env
+data/backups/
+data/heartbeat

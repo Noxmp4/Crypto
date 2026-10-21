@@ -50,6 +50,69 @@ class RiskCfg:
 
 
 @dataclass
+class TrendCfg:
+    """Poche tactique : suivi de tendance journalier (paramètres de manuel, non optimisés)."""
+    enabled: bool = True
+    products: list[str] = field(default_factory=lambda: ["BTC-EUR", "ETH-EUR", "SOL-EUR"])
+    capital_eur: float = 300.0
+    timeframe: str = "ONE_DAY"
+    sma_regime: int = 200
+    donchian_entry: int = 20
+    donchian_exit: int = 10
+    atr_period: int = 20
+    atr_mult: float = 3.0
+    risk_per_trade: float = 0.01
+    max_asset_pct: float = 0.5
+    entry_buffer: float = 0.003      # limite « marketable » à close × (1 + buffer)
+    stop_limit_gap: float = 0.01     # en live : limite du stop à stop × (1 − gap)
+
+
+@dataclass
+class DcaCfg:
+    """Poche cœur : achats programmés, jamais de vente."""
+    enabled: bool = True
+    monthly_eur: float = 100.0
+    weights: dict[str, float] = field(default_factory=lambda: {"BTC-EUR": 0.7, "ETH-EUR": 0.3})
+    weekday: int = 0                 # 0 = lundi
+    hour: int = 9
+    minute: int = 0
+    tilt: bool = False
+    reprice_minutes: int = 30
+    max_wait_hours: int = 6
+
+
+@dataclass
+class PromotionCfg:
+    auto: bool = True
+    dca_min_days: int = 7
+    trend_min_days: int = 30
+    intraday_min_days: int = 30
+    trend_min_oos_profit_factor: float = 1.2
+    trend_max_oos_drawdown: float = 0.25
+    max_live_capital_eur: float = 0.0   # 0 = aucun euro réel engagé tant que tu ne le fixes pas
+
+
+@dataclass
+class AiCfg:
+    enabled: bool = True
+    model: str = "claude-opus-5-5"
+    effort: str = "high"
+    daily_hour: int = 7
+    daily_minute: int = 30
+    monthly_budget_usd: float = 15.0
+    max_questions_per_day: int = 20
+    web_search_max_uses: int = 5
+
+
+@dataclass
+class WebCfg:
+    cf_team_domain: str = ""     # ex. "monequipe.cloudflareaccess.com"
+    cf_aud: str = ""             # tag d'audience de l'application Access
+    host: str = "127.0.0.1"
+    port: int = 8080
+
+
+@dataclass
 class Config:
     mode: str = "paper"
     products: list[str] = field(default_factory=lambda: ["BTC-EUR"])
@@ -64,6 +127,38 @@ class Config:
     journal_path: str = "data/journal.sqlite"
     data_dir: str = "data"
     notifications: bool = True
+    timezone: str = "Europe/Paris"
+    intraday_enabled: bool = False
+    intraday_capital_eur: float = 300.0
+    trend: TrendCfg = field(default_factory=TrendCfg)
+    dca: DcaCfg = field(default_factory=DcaCfg)
+    promotion: PromotionCfg = field(default_factory=PromotionCfg)
+    ai: AiCfg = field(default_factory=AiCfg)
+    web: WebCfg = field(default_factory=WebCfg)
+
+    def path(self, name: str) -> str:
+        return str(Path(self.data_dir) / name)
+
+    @property
+    def paper_journal_path(self) -> str:
+        return self.journal_path.replace(".sqlite", "_paper.sqlite")
+
+    @property
+    def control_path(self) -> str:
+        return self.path("control.sqlite")
+
+    @property
+    def market_cache_path(self) -> str:
+        return self.path("market.sqlite")
+
+    @property
+    def all_products(self) -> list[str]:
+        """Toutes les paires suivies (intraday, tendance, DCA), sans doublon, ordre stable."""
+        out: list[str] = []
+        for p in [*self.products, *self.trend.products, *self.dca.weights]:
+            if p not in out:
+                out.append(p)
+        return out
 
 
 def _dt(s: str) -> datetime:
@@ -98,4 +193,12 @@ def load(path: str | Path = "config.toml") -> Config:
         journal_path=here(raw.get("journal", {}).get("path", "data/journal.sqlite")),
         data_dir=here("data"),
         notifications=raw.get("macos", {}).get("notifications", True),
+        timezone=raw.get("timezone", "Europe/Paris"),
+        intraday_enabled=raw.get("sleeves", {}).get("intraday", {}).get("enabled", False),
+        intraday_capital_eur=raw.get("sleeves", {}).get("intraday", {}).get("capital_eur", 300.0),
+        trend=TrendCfg(**raw.get("sleeves", {}).get("trend", {})),
+        dca=DcaCfg(**raw.get("sleeves", {}).get("dca", {})),
+        promotion=PromotionCfg(**raw.get("promotion", {})),
+        ai=AiCfg(**raw.get("ai", {})),
+        web=WebCfg(**raw.get("web", {})),
     )

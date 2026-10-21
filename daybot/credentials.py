@@ -39,7 +39,14 @@ def credentials() -> dict:
     """Arguments pour RESTClient : key_file, ou api_key/api_secret (env puis Trousseau)."""
     key_file = os.getenv("COINBASE_KEY_FILE")
     if key_file:
-        return {"key_file": str(Path(key_file).expanduser())}
+        path = Path(key_file).expanduser()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise RuntimeError(f"Fichier de clé Coinbase illisible ({path}) : {e}") from e
+        if not (isinstance(data, dict) and data.get("name") and data.get("privateKey")):
+            raise RuntimeError(f"Fichier de clé Coinbase incomplet ({path}) : name/privateKey manquants")
+        return {"key_file": str(path)}
     key, secret = get("COINBASE_API_KEY"), get("COINBASE_API_SECRET")
     if not (key and secret):
         raise RuntimeError(
@@ -69,3 +76,14 @@ def forget() -> None:
             kr.delete_password(SERVICE, n)
         except Exception:  # noqa: BLE001 — déjà absent
             pass
+
+
+def anthropic_key() -> str | None:
+    """Clé Anthropic : ANTHROPIC_API_KEY, ou fichier ANTHROPIC_API_KEY_FILE (secret Docker)."""
+    if os.getenv("ANTHROPIC_API_KEY"):
+        return os.environ["ANTHROPIC_API_KEY"]
+    path = os.getenv("ANTHROPIC_API_KEY_FILE")
+    if path and os.path.exists(path):
+        key = Path(path).read_text(encoding="utf-8").strip()
+        return key or None
+    return None

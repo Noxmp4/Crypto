@@ -155,8 +155,13 @@ def test_credentials_env_then_keychain(tmp_path, monkeypatch):
 
     monkeypatch.setenv("COINBASE_API_KEY", "env-key")          # l'environnement prime
     assert credentials.credentials()["api_key"] == "env-key"
-    monkeypatch.setenv("COINBASE_KEY_FILE", "~/k.json")
-    assert credentials.credentials() == {"key_file": str(__import__("pathlib").Path("~/k.json").expanduser())}
+    monkeypatch.setenv("COINBASE_KEY_FILE", str(key))          # fichier valide : prioritaire
+    assert credentials.credentials() == {"key_file": str(key)}
+    bad = tmp_path / "vide.json"
+    bad.write_text("{}")
+    monkeypatch.setenv("COINBASE_KEY_FILE", str(bad))          # fichier vide : refusé
+    with pytest.raises(RuntimeError, match="incomplet"):
+        credentials.credentials()
 
     credentials.forget()
     assert kr.store == {}

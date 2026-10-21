@@ -1,101 +1,138 @@
-# daybot — bot de daytrading spot pour Coinbase Advanced
+# daybot — bot d'investissement crypto pour Coinbase Advanced
 
-Bot Python **long-only, spot, sans levier** pour Coinbase Advanced Trade (paires EUR).
-Il tourne en trois modes qui partagent le même moteur : **backtest**, **paper** (simulation
-en temps réel), **live** (ordres réels).
+Bot Python **spot, sans levier, long uniquement**, pour Coinbase Advanced Trade (paires EUR).
+Il **analyse** le marché (indicateurs et rapport rédigé par Claude), **conseille** (rapport
+quotidien et questions depuis le site) et **investit** en trois poches indépendantes :
 
-> ⚠️ **À lire avant tout** : sur l'historique Coinbase d'avril à octobre 2026, la stratégie
-> fournie **perd de l'argent**, frais compris (voir *Résultats du backtest*). Ce dépôt est un
-> cadre d'exécution et de gestion du risque solide, **pas une stratégie gagnante**. Ne passez
-> pas en live tant qu'un backtest *et* plusieurs semaines de paper ne sont pas positifs.
+| Poche | Ce qu'elle fait | Par défaut |
+|---|---|---|
+| **Cœur DCA** | Achats hebdomadaires par ordres limites (frais maker). Elle achète d'abord l'actif sous-pondéré et **ne vend jamais**. | 100 €/mois, BTC 70 % / ETH 30 % |
+| **Tendance** | Suivi de tendance journalier (cassure Donchian 20/10, SMA200), stop suiveur posé sur Coinbase | 300 €, BTC/ETH/SOL, 1 % de risque par trade |
+| **Intraday** | Daytrading 15 min (v1) | **désactivée** : perdante à cause des frais |
 
-## Ce qui a été repris du rapport et du compte
+Sur le VPS, il tourne 24/7 dans Docker, avec un **site web privé sur ton domaine Cloudflare**
+(Tunnel + Access) : tableau de bord, analyses IA, trades, critères de passage en réel,
+contrôles (pause, kill switch, rétrogradation, clôture). → **[DEPLOY.md](DEPLOY.md)**
 
-| Constat | Traduction dans le bot |
-|---|---|
-| Frais lus sur votre compte (palier *Intro*) : 0,25 % maker / 0,50 % taker | `[fees]`. Entrées en **limite post-only** (maker) ; un filtre exige que le TP couvre ≥ 3× les frais aller-retour |
-| Marché en range avec biais prudent, altcoins plus fragiles | Filtre de régime : aucune entrée si la tendance du timeframe supérieur n'est pas haussière (le bot reste en EUR) |
-| « Éviter le levier » | Spot uniquement, aucune vente à découvert, aucune option dérivés |
-| Catalyseur binaire : la Fed le 28/10 | `blackout` : aucune nouvelle entrée du 28/10 16h UTC au 29/10 2h UTC |
-| Risque de change USD | Paires **EUR** par défaut |
-| Fiscalité FR (PFU 31,4 %, formulaire 2086) | Journal SQLite et `export-tax` : CSV de toutes les cessions crypto → EUR, avec prix et frais |
-| Sécurité | Clé API « Trade » seulement (jamais « Transfer »), kill switch par fichier |
+> ⚠️ **À lire avant tout.**
+> - Sur 2018–2026, la poche tendance est **légèrement positive mais très en dessous du simple
+>   fait de conserver les actifs** (voir *Résultats*).
+> - Le daytrading est perdant.
+> - L'essentiel de la performance historique vient du **DCA**, c'est-à-dire de la détention.
+>
+> Ceci n'est pas un conseil en investissement.
 
-Formules de sizing et de R:R reprises du skill `crypto-spot-futures-analysis`.
-La recherche de skills (`/find-skills`) n'a trouvé aucun skill dédié aux bots de trading ou à Coinbase.
+## Comment l'argent réel est protégé
 
-## Stratégie (`daybot/strategy.py`)
+- **Paper d'abord, toujours** : chaque poche tourne en simulation (« ombre ») avant le réel, et
+  continue en parallèle ensuite.
+- **Passage en réel automatique, poche par poche**, seulement si *toutes* ces conditions sont
+  vraies (`daybot/promotion.py`, page **Stratégies**) :
+  - ton accord au déploiement : `DAYBOT_LIVE_CONFIRM=OUI`, une clé Coinbase, et un plafond
+    `max_live_capital_eur` > 0 (0 par défaut) ;
+  - au moins 7 jours de paper sans erreur pour le DCA, 30 jours pour la tendance ;
+  - pour la tendance : profit factor hors échantillon ≥ 1,2 et drawdown ≤ 25 %, recalculés
+    chaque dimanche.
+- **Plafond d'euros réels** : le bot n'engage jamais plus que `max_live_capital_eur`, positions
+  et DCA cumulés.
+- **Stops posés sur Coinbase** dès le remplissage d'un achat : une position reste protégée si
+  le VPS s'éteint. Une **réconciliation horaire** annule les ordres orphelins du bot et repose
+  toute protection manquante.
+- **L'IA ne peut que réduire le risque** :
+  - elle peut diviser par deux ou couper la taille des positions de la poche tendance pendant
+    24 h, et ajouter au plus trois fenêtres datées sans nouvelle entrée (48 h maximum chacune) ;
+  - elle ne passe aucun ordre et ne touche pas au DCA ;
+  - son budget est plafonné chaque mois (15 $ par défaut).
+- **Clé Coinbase** : View + Trade uniquement, **jamais Transfer**, restreinte à l'IP du VPS.
+- **Garde-fous** : 1 % de risque par trade, perte journalière max, drawdown max par poche,
+  kill switch, pause, blackouts macro (le FOMC du 28/10 est préconfiguré).
 
-Sur chaque bougie **clôturée** du timeframe signal (15 min par défaut) :
+## Analyse et conseils (API Claude)
 
-1. **Régime** : sur le timeframe tendance (1 h), close > EMA50 et EMA50 montante.
-2. **Déclencheur** : croisement EMA9 > EMA21, ou rebond (mèche sous l'EMA21 et clôture au-dessus).
-3. **Momentum** : RSI(14) entre 50 et 70.
-4. **Ordre** : achat limite post-only à `close − 0,1·ATR`, annulé au bout de 2 bougies s'il n'est pas rempli.
-5. **Sorties** posées sur l'exchange dès le remplissage (ordre *bracket*) :
-   stop = entrée − 1,5·ATR, TP = entrée + 2R. Sortie au marché après 8 h (pas de swing involontaire).
-6. **Filtre d'edge** : on ne trade pas si `(TP − entrée)/entrée < 3 × (maker + taker)`.
+- **Rapport quotidien** (7 h 30, heure de Paris), en deux appels :
+  1. **recherche web** : actualité, ETF, agenda macro, avec les sources ;
+  2. **synthèse structurée** :
+     - le régime de marché ;
+     - pour chaque paire, sa tendance, ses supports et ses résistances ;
+     - les scénarios conditionnels, les conseils et les risques ;
+     - les leviers de risque proposés, filtrés par les garde-fous ci-dessus.
+- **Questions** depuis le site. Le contexte du portefeuille et du marché est joint
+  automatiquement. 20 questions par jour au maximum.
+- **Modèle** : `claude-opus-5-5`, avec repli serveur activé si le modèle refuse une requête
+  (`fallbacks: "default"`). Coût estimé : environ 10 $ par mois.
+- Les pages web lues par l'IA sont traitées comme de la **donnée**, jamais comme des
+  instructions.
 
-Pas de biais de look-ahead : une bougie n'est utilisée qu'après sa clôture, y compris celles du timeframe supérieur.
+## Résultats (calculés le 21/10/2026 sur l'historique public Coinbase, frais du palier Intro)
 
-## Gestion du risque (`daybot/risk.py`)
+**Tendance**, capital de 300 €, paramètres de manuel fixés à l'avance (non optimisés) :
 
-| Garde-fou | Défaut |
-|---|---|
-| Risque par trade (perte au stop) | 0,5 % du capital |
-| Taille max d'une position | 25 % du capital |
-| Positions simultanées | 2 (1 par paire) |
-| Trades par jour | 6 |
-| Perte journalière max | −2 % → plus d'entrée jusqu'au lendemain (UTC) |
-| Drawdown max | −10 % depuis le plus haut → arrêt des entrées |
-| Ordre minimum | 10 € |
-| Kill switch | `touch data/STOP` bloque toute nouvelle entrée |
+| Période | Rendement | Annualisé | Drawdown max | Trades | Réussite | Profit factor |
+|---|---|---|---|---|---|---|
+| Référence 2018–2022 | +23,0 % | +4,2 % | −5,5 % | 42 | 60 % | 3,05 |
+| **Hors échantillon 2023 → 10/2026** | **+5,6 %** | **+1,4 %** | −7,1 % | 62 | 42 % | **1,26** |
+| Complet 2018 → 10/2026 | +29,9 % | +3,0 % | −7,1 % | 104 | 49 % | 1,78 |
+
+Sur la même période hors échantillon, conserver les actifs aurait rapporté **BTC +376 %,
+ETH +95 %, SOL +917 %**.
+
+La poche tendance risque peu et rapporte peu. Elle passe de justesse le seuil de promotion
+(profit factor ≥ 1,2). Sans frais, elle aurait fait +11,9 % hors échantillon : les frais en
+mangent la moitié.
+
+**DCA**, 100 €/mois, BTC 70 % / ETH 30 %, du 01/2019 au 10/2026 :
+
+| Variante | Investi | Valeur | Gain |
+|---|---|---|---|
+| DCA simple (défaut) | 9 392 € | 38 179 € | +306 % |
+| DCA « tilt » (×1,5 sous la SMA200) | 11 079 € | 46 551 € | +320 % |
+
+Le tilt investit plus quand les prix sont bas, donc les montants investis diffèrent. Il reste
+désactivé par défaut (`[sleeves.dca] tilt`).
+
+**Intraday 15 min** (v1), du 23/04 au 20/10/2026 : **−9,9 %** net, −2,3 % sans frais.
+Désactivé.
+
+Pour reproduire : `python -m daybot research` (tendance et DCA) et
+`python -m daybot backtest --days 180` (intraday). Le bot relance la recherche chaque dimanche
+et l'affiche sur la page **Stratégies**.
 
 ## Installation sur macOS (Intel ou Apple Silicon)
 
-Python 3.9 ou plus récent. Le `/usr/bin/python3` d'Apple (3.9) fonctionne. Homebrew est
-recommandé (`brew install python@3.12`).
+Python 3.9 ou plus récent. Python 3.10+ est nécessaire pour l'analyse IA, car le SDK
+`anthropic` 1.x l'exige. Homebrew est recommandé : `brew install python@3.12`.
 
 ```bash
 git clone https://github.com/Noxmp4/crypto.git
 cd crypto
-scripts/install_macos.sh        # crée .venv, installe les dépendances, lance les 16 tests
+scripts/install_macos.sh        # crée .venv, installe les dépendances, lance les tests
 ```
-
-Le script choisit le Python le plus récent disponible et peut être relancé sans risque.
-Si macOS bloque l'exécution : `chmod +x scripts/*.sh`.
 
 ### Utilisation sur macOS
 
 ```bash
-scripts/run_macos.sh backtest --days 180   # historique public, aucune clé requise
-scripts/run_macos.sh paper                 # temps réel simulé, 1000 € fictifs
-scripts/run_macos.sh status                # positions et P&L du journal
-scripts/run_macos.sh export-tax --out data/cessions_2026.csv
-touch data/STOP                            # kill switch : plus aucune nouvelle entrée
+scripts/run_macos.sh research               # backtests tendance (hors échantillon) + DCA
+scripts/run_macos.sh run                    # bot complet en local (paper ombre + IA si clé)
+DAYBOT_WEB_DEV=1 scripts/run_macos.sh web   # site sur http://127.0.0.1:8080, sans authentification
+scripts/run_macos.sh promotion              # critères de passage en réel
+scripts/run_macos.sh backtest --days 180    # intraday v1
+touch data/STOP                             # kill switch : plus aucune nouvelle entrée
 ```
+
+Lance `run` et `web` dans deux onglets du Terminal. Le mode développement du site, sans
+authentification, est refusé ailleurs que sur `127.0.0.1`.
 
 Spécificités macOS :
 
-- **Pas de mise en veille** : en mode `paper` ou `live`, `run_macos.sh` lance le bot sous
-  `caffeinate -is`. Le Mac ne s'endort pas tant que le bot tourne, sur secteur. Un MacBook
-  **capot fermé** sans écran externe s'endort quand même : laissez-le ouvert ou utilisez un Mac mini.
-- **Notifications** : chaque achat rempli, chaque sortie (avec le P&L) et chaque arrêt du bot
-  s'affichent dans le Centre de notifications. Pour les couper : `notifications = false` sous
-  `[macos]` dans `config.toml`. La première notification peut demander une autorisation pour
-  « Script Editor » ou le Terminal dans *Réglages Système → Notifications*.
-- **Trousseau** : la clé API peut être stockée dans le Trousseau macOS plutôt qu'en fichier
-  (voir *Passer en réel*).
-- **Arrêt et reprise** : `Ctrl+C` arrête le bot. Au relancement, il reprend son état depuis
-  `data/` : positions ouvertes, solde paper, plus haut de capital pour le drawdown, perte du jour.
-- **Logs** : `data/daybot.log`, avec rotation à 5 Mo et 3 archives. Suivi en direct :
-  `tail -f data/daybot.log`.
-- Le bot peut être lancé depuis n'importe quel dossier : les chemins de `config.toml` sont
-  relatifs à son emplacement.
-
-Pour qu'il tourne après fermeture du Terminal, lancez-le dans `tmux` ou `screen`
-(`brew install tmux`, puis `tmux new -s daybot` et `scripts/run_macos.sh paper`).
-Pour vous détacher sans l'arrêter : `Ctrl+B` puis `D`.
+- **Pas de mise en veille** : `run_macos.sh run|paper|live` lance le bot sous `caffeinate -is`.
+  Un MacBook capot fermé sans écran externe s'endort quand même. Pour du 24/7, préfère le VPS.
+- **Notifications** : chaque achat, chaque sortie et chaque arrêt s'affichent dans le Centre
+  de notifications (`[macos] notifications`).
+- **Trousseau** : `scripts/run_macos.sh keychain-import ~/Downloads/cdp_api_key.json` range la
+  clé Coinbase dans le Trousseau. Supprime ensuite le JSON.
+- **Arrêt et reprise** : `Ctrl+C` termine la tâche en cours puis s'arrête. Au relancement, tout
+  reprend depuis `data/` : positions, solde paper, plus haut de capital, perte du jour,
+  prochaines exécutions.
 
 ## Installation sur Linux / autres
 
@@ -103,102 +140,59 @@ Pour vous détacher sans l'arrêter : `Ctrl+B` puis `D`.
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python -m pytest -q
-python -m daybot backtest --days 180      # mêmes commandes, avec « python -m daybot »
+python -m daybot research
 ```
 
-### Passer en réel (seulement après validation)
+## Commandes
 
-1. Sur <https://portal.cdp.coinbase.com/>, créez une clé API **Advanced Trade** avec les permissions
-   **View + Trade** uniquement. N'activez **pas Transfer**. Restreignez-la à votre IP.
-2. Si possible, créez un **portefeuille dédié** au bot dans Coinbase Advanced, avec uniquement le capital
-   que vous acceptez de perdre, et mettez son UUID dans `portfolio_id`.
-3. Approvisionnez-le en EUR. Votre compte ne contient aujourd'hui qu'environ 0,0018 ETH (≈ 4 €) :
-   c'est en dessous du minimum de 10 € par ordre, donc le bot ne peut rien faire en l'état.
-4. Rangez la clé. Sur macOS, mettez-la dans le **Trousseau**, puis supprimez le JSON :
-
-```bash
-scripts/run_macos.sh keychain-import ~/Downloads/cdp_api_key.json
-rm ~/Downloads/cdp_api_key.json          # la clé n'existe plus qu'en Trousseau
-# pour la retirer plus tard : scripts/run_macos.sh keychain-forget
-```
-
-   Si macOS demande l'accès au Trousseau au lancement, cliquez « Toujours autoriser ».
-   Autres options, prioritaires sur le Trousseau : `export COINBASE_KEY_FILE=~/cdp_api_key.json`,
-   ou `COINBASE_API_KEY` / `COINBASE_API_SECRET`.
-5. Ouvrez `config.toml` (par exemple `open -e config.toml`) et remplacez `mode = "paper"` par
-   `mode = "live"`.
-6. Lancez :
-
-```bash
-DAYBOT_LIVE_CONFIRM=OUI scripts/run_macos.sh live --live
-```
-
-Le mode réel exige ces trois verrous en même temps. Le bot ne vend jamais d'actifs qu'il n'a pas
-achetés lui-même : vos ETH existants ne sont pas touchés. Comme le stop et le TP sont posés côté
-Coinbase, une position reste protégée même si le bot s'arrête. Au redémarrage, l'état est relu
-depuis `data/journal.sqlite`.
-
-Pour faire tourner le bot 24/7, utilisez un Mac branché qui ne se met pas en veille, avec `tmux`,
-ou un petit VPS Linux.
-
-## Résultats du backtest (au 20/10/2026, 1 000 € de départ, frais du palier Intro)
-
-Période du 23/04 au 20/10/2026, sur les quatre paires :
-
-| Variante | Rendement net | Sans frais (mêmes trades) | Max DD | Trades | Réussite | Frais |
-|---|---|---|---|---|---|---|
-| 15 min / filtre 1 h (défaut) | **−9,9 %** | −2,3 % | −10,2 % | 46 | 28 % | 73 € |
-| 1 h / filtre 6 h | **−10,2 %** | +0,3 % | −10,2 % | 33 | 18 % | 56 € |
-| *Buy & hold, même période* | BTC +11 %, ETH +10 %, SOL +29 %, XRP −3 % | | | | | |
-
-Sur 60 jours (21/08 au 20/10), la variante par défaut fait −6,9 % (sans frais : +1,8 %).
-
-**Lecture** : sans frais, la stratégie est à peu près à l'équilibre. Les frais du palier Intro
-(≈ 0,75 % par aller-retour) en font une stratégie perdante. Les deux variantes ont atteint le
-drawdown de −10 %, ce qui a déclenché l'arrêt automatique. C'est le comportement attendu du
-garde-fou. Sur cette période, conserver les actifs a largement battu le trading.
-Pour que le daytrading devienne viable, il faudrait un *edge* brut nettement supérieur aux frais.
-Ne cherchez pas à optimiser les paramètres sur ces mêmes données : c'est du surapprentissage.
-
-Reproduire : `python -m daybot backtest --days 180`.
+| Commande | Rôle |
+|---|---|
+| `run` | Processus permanent : paper ombre, réel automatique, DCA, IA, réconciliation, sauvegardes |
+| `web [--host --port]` | Site (FastAPI). Exige Cloudflare Access ou `DAYBOT_WEB_DEV=1` en local |
+| `research` | Backtests tendance (2018–2022 / 2023 → aujourd'hui) et DCA simple contre tilt |
+| `promotion` | Critères de passage en réel, poche par poche |
+| `status` | Positions et P&L des journaux |
+| `export-tax [--out]` | CSV des cessions crypto → EUR (formulaire 2086) |
+| `backtest`, `paper`, `live` | Intraday v1 (boucle 15 min), conservé |
+| `keychain-import`, `keychain-forget` | Clé Coinbase dans le Trousseau macOS |
 
 ## Architecture
 
 ```
 daybot/
-  config.py      chargement de config.toml
-  market.py      bougies et spécifications produit (API publique Coinbase)
-  indicators.py  EMA, RSI, ATR
-  strategy.py    features + règles d'entrée
-  risk.py        sizing + garde-fous
-  broker.py      PaperBroker (simulation conservatrice) / LiveBroker (SDK coinbase-advanced-py)
-  engine.py      moteur commun : une bougie clôturée → gestion des ordres → nouveau signal
-  journal.py     SQLite (trades, état du moteur) et export fiscal CSV
-  backtest.py    rejoue l'historique à travers le même moteur
-  credentials.py clés API : variables d'environnement, sinon Trousseau macOS (keyring)
-  notify.py      notifications macOS (osascript), sans effet ailleurs
-  __main__.py    CLI
-scripts/
-  install_macos.sh   installation (venv + dépendances + tests)
-  run_macos.sh       lancement (caffeinate pour paper/live)
+  runner.py        processus permanent : poches × (paper, live), commandes du site, tâches
+  scheduler.py     planificateur persistant (prochaines exécutions dans SQLite)
+  engine.py        moteur commun backtest / paper / live pour les poches à position
+  strategies/      base.py (interface), trend.py (Donchian + chandelier), intraday.py (v1)
+  sleeves/dca.py   DCA : répartition sans vente, ordres post-only, reprix, bascule taker
+  promotion.py     critères paper → réel, plafond d'euros réels
+  analyst.py       API Claude : recherche web + synthèse structurée, garde-fous, budget
+  risk.py          sizing, garde-fous, contrôles (pause, blocages, multiplicateur IA)
+  broker.py        PaperBroker (simulation prudente) / LiveBroker (SDK Coinbase, réconciliation)
+  journal.py       SQLite (trades, lots DCA, commandes, analyses, événements, capital)
+  market.py        API publique Coinbase + cache SQLite incrémental
+  backtest.py      backtests (même moteur que le live), recherche hors échantillon, DCA
+  web/             FastAPI + Jinja2 : pages, auth Cloudflare Access, graphiques SVG
+  credentials.py   clés : fichier, variables d'environnement, Trousseau macOS, secrets Docker
+deploy/setup_vps.sh   préparation d'un VPS Ubuntu 24.04
+Dockerfile, docker-compose.yml   bot + web + cloudflared
 ```
-
-Pour changer de stratégie, il suffit de remplacer `strategy.signal_at`. Risque, exécution,
-journal et backtest restent inchangés.
 
 ## Limites connues
 
-- Le comportement exact de l'ordre bracket Coinbase n'a pas été testé avec de vrais fonds : son stop
-  se déclenche puis s'exécute en limite. En cas de krach rapide, l'ordre peut ne pas être rempli.
-  Testez-le d'abord avec 10–20 € et surveillez les premiers trades.
-- La simulation suppose qu'un ordre limite est rempli dès que le prix le traverse, sans file d'attente.
-  La réalité est souvent un peu moins favorable.
-- Le CSV fiscal liste les cessions, mais la plus-value française (art. 150 VH bis) dépend de la valeur
-  **globale** de votre portefeuille à chaque cession. Complétez-le avec un outil de déclaration
-  ou faites-le valider par un professionnel.
-- Le support macOS a été testé sous Linux avec Python 3.9 (version de `/usr/bin/python3` sur macOS)
-  et 3.13, mais pas sur un Mac physique. Les appels propres à macOS (`osascript`, `caffeinate`,
-  Trousseau) sont couverts par des tests simulés. Lancez `scripts/install_macos.sh` puis un
-  backtest pour valider sur votre machine.
-- **Ceci n'est pas un conseil en investissement.** Le daytrading crypto fait perdre de l'argent à la
-  majorité des particuliers, surtout quand les frais sont élevés.
+- **Ordres réels jamais testés avec de vrais fonds** : ni le stop-limit de Coinbase, ni ses
+  ordres bracket. Dans un krach rapide, un stop-limit peut ne pas être exécuté. Commence avec
+  un petit plafond (`max_live_capital_eur` = 20 à 50 €) et surveille les premiers trades.
+- **Simulation optimiste sur les fills** : la simulation remplit un ordre limite dès que le prix
+  le traverse, sans file d'attente.
+- **Rattrapage limité** : après un arrêt, seule la dernière bougie est traitée, sans rattrapage
+  des signaux manqués. Un DCA manqué le lundi s'exécute au redémarrage.
+- **Fiscalité incomplète** : le CSV fiscal liste les cessions. Le calcul français
+  (art. 150 VH bis) dépend de la valeur **globale** du portefeuille à chaque cession : à faire
+  valider.
+- **Analyse IA sans garantie** : elle peut se tromper, d'où les garde-fous et le fait qu'elle
+  ne passe aucun ordre.
+- **Pas d'alerte push** : il n'y a pas encore d'alerte e-mail ou téléphone. Il faut consulter
+  le site.
+- **Ceci n'est pas un conseil en investissement.** Les cryptoactifs sont très volatils : tu peux
+  perdre tout ou partie du capital engagé.

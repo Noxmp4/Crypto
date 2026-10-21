@@ -1,9 +1,12 @@
-# ─── Configuration du bot de daytrading Coinbase Advanced ───
-# Mode : "backtest" | "paper" | "live". Le mode live exige aussi --live en CLI
-# et la variable d'environnement DAYBOT_LIVE_CONFIRM=OUI.
+# ─── Configuration de daybot (Coinbase Advanced, paires EUR) ───
+# Sur le VPS, `python -m daybot run` fait tourner en permanence :
+#   - le paper « ombre » de toutes les poches activées ;
+#   - le réel, poche par poche, dès que les critères de [promotion] sont remplis.
+# `mode` ne sert qu'aux anciennes commandes `paper` / `live` (intraday v1).
 mode = "paper"
+timezone = "Europe/Paris"
 
-# Paires tradées (cotation EUR : pas de risque de change pour un résident FR).
+# Paires de la poche intraday (v1). Les autres poches ont leurs propres listes plus bas.
 products = ["BTC-EUR", "ETH-EUR", "SOL-EUR", "XRP-EUR"]
 portfolio_id = ""           # vide = portefeuille par défaut
 quote_currency = "EUR"
@@ -48,10 +51,67 @@ blackout = [
 ]
 
 [paper]
-starting_balance = 1000.0
+starting_balance = 1500.0     # capital fictif du paper (tendance + plusieurs mois de DCA)
 
 [journal]
 path = "data/journal.sqlite"
 
 [macos]
 notifications = true         # Centre de notifications : achats, sorties, arrêt du bot
+
+# ─── Poches ───
+[sleeves.dca]                 # cœur : achats hebdomadaires, JAMAIS de vente
+enabled = true
+monthly_eur = 100.0           # découpé en achats hebdomadaires (≈ 23 €/semaine)
+weekday = 0                   # 0 = lundi
+hour = 9                      # heure de Paris
+minute = 0
+tilt = false                  # ×1,5 sous la SMA200 / ×0,75 au-dessus de 1,5×SMA200 (voir page Stratégies)
+reprice_minutes = 30
+max_wait_hours = 6
+
+[sleeves.dca.weights]         # répartition cible (les achats vont d'abord à l'actif sous-pondéré)
+"BTC-EUR" = 0.7
+"ETH-EUR" = 0.3
+
+[sleeves.trend]               # tactique : suivi de tendance journalier, stop suiveur sur l'exchange
+enabled = true
+products = ["BTC-EUR", "ETH-EUR", "SOL-EUR"]
+capital_eur = 300.0           # capital alloué à la poche
+risk_per_trade = 0.01         # 1 % du capital de la poche risqué au stop initial
+max_asset_pct = 0.5           # une position ≤ 50 % du capital de la poche
+# Paramètres de manuel, NON optimisés : sma_regime=200, donchian_entry=20,
+# donchian_exit=10, atr_period=20, atr_mult=3.0 (modifiables ici).
+
+[sleeves.intraday]            # daytrading 15 min v1 : perdant en backtest (frais) → désactivé
+enabled = false
+capital_eur = 300.0
+
+# ─── Passage en réel ───
+[promotion]
+auto = true                   # promotion automatique quand tous les critères sont remplis
+dca_min_days = 7
+trend_min_days = 30
+trend_min_oos_profit_factor = 1.2
+trend_max_oos_drawdown = 0.25
+# Plafond d'euros réels que le bot peut engager (positions + achats DCA cumulés).
+# 0 = aucun euro réel, même si les autres critères sont remplis.
+max_live_capital_eur = 0.0
+
+# ─── Analyste IA (API Claude) ───
+[ai]
+enabled = true                # nécessite la clé ANTHROPIC_API_KEY (ou le secret Docker)
+model = "claude-opus-5-5"
+effort = "high"
+daily_hour = 7                # rapport quotidien, heure de Paris
+daily_minute = 30
+monthly_budget_usd = 15.0     # au-delà : plus aucun appel jusqu'au mois suivant
+max_questions_per_day = 20
+web_search_max_uses = 5
+
+# ─── Site web (Cloudflare Tunnel + Access) ───
+[web]
+cf_team_domain = ""           # ex. "monequipe.cloudflareaccess.com" (Zero Trust → Settings)
+cf_aud = ""                   # « Application Audience (AUD) Tag » de l'application Access
+host = "127.0.0.1"
+port = 8080
